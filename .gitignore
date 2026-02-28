@@ -1,0 +1,24 @@
+.gradle
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+### IntelliJ IDEA ###
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+.idea_modules/
+
+### Kotlin ###
+.kotlin/
+
+### OS ###
+.DS_Store
+Thumbs.db
+
+### Project Specific ###
+local.properties
+.DS_Store
+composeApp/build/
