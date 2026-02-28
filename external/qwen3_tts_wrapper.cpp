@@ -7,6 +7,8 @@
 
 #if defined(_WIN32)
 #define QWEN_API __declspec(dllexport)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #else
 #define QWEN_API __attribute__((visibility("default")))
 #endif
@@ -14,6 +16,24 @@
 using namespace qwen3_tts;
 
 extern "C" {
+
+#if defined(_WIN32)
+static void dump_module_path(const char * module_name) {
+    HMODULE mod = GetModuleHandleA(module_name);
+    if (!mod) {
+        fprintf(stderr, "[Wrapper] Module not loaded: %s\n", module_name);
+        return;
+    }
+
+    char path_buf[MAX_PATH] = {0};
+    DWORD len = GetModuleFileNameA(mod, path_buf, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) {
+        fprintf(stderr, "[Wrapper] Module loaded but path unavailable: %s\n", module_name);
+        return;
+    }
+    fprintf(stderr, "[Wrapper] Module path: %s => %s\n", module_name, path_buf);
+}
+#endif
 
 struct QwenContext {
     Qwen3TTS* engine;
@@ -23,6 +43,13 @@ struct QwenContext {
 QWEN_API void qwen3_tts_backend_init() {
     // Rely on engine's internal lazy initialization
     fprintf(stderr, "[Wrapper] Backend init called\n");
+#if defined(_WIN32)
+    dump_module_path("qwen3_tts.dll");
+    dump_module_path("ggml.dll");
+    dump_module_path("ggml-base.dll");
+    dump_module_path("ggml-cpu.dll");
+    dump_module_path("ggml-cuda.dll");
+#endif
     fflush(stderr);
 }
 
@@ -35,18 +62,20 @@ QWEN_API QwenContext* qwen3_tts_init(const char* model_dir) {
     try {
         QwenContext* ctx = new QwenContext();
         ctx->engine = new Qwen3TTS();
-        
-        if (ctx->engine->load_models(model_dir)) {
+
+        bool ok = ctx->engine->load_models(model_dir);
+
+        if (ok) {
             fprintf(stderr, "[Wrapper] Load success\n");
             fflush(stderr);
             return ctx;
-        } else {
-            fprintf(stderr, "[Wrapper] Load failed: %s\n", ctx->engine->get_error().c_str());
-            fflush(stderr);
-            delete ctx->engine;
-            delete ctx;
-            return nullptr;
         }
+
+        fprintf(stderr, "[Wrapper] Load failed: %s\n", ctx->engine->get_error().c_str());
+        fflush(stderr);
+        delete ctx->engine;
+        delete ctx;
+        return nullptr;
     } catch (const std::exception& e) {
         fprintf(stderr, "[Wrapper] Exception: %s\n", e.what());
         fflush(stderr);
