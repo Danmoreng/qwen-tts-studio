@@ -13,10 +13,13 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.qwen.tts.studio.screens.SetupScreen
 import com.qwen.tts.studio.screens.StudioScreen
 import com.qwen.tts.studio.screens.VoicesScreen
 import com.qwen.tts.studio.theme.AppTheme
+import com.qwen.tts.studio.viewmodel.SettingsViewModel
+import com.qwen.tts.studio.viewmodel.StudioViewModel
 import org.jetbrains.compose.ui.tooling.preview.Preview
 
 enum class Screen(val label: String, val icon: ImageVector) {
@@ -30,6 +33,10 @@ enum class Screen(val label: String, val icon: ImageVector) {
 fun App() {
     var currentScreen by remember { mutableStateOf(Screen.Studio) }
     var isDarkMode by remember { mutableStateOf(true) }
+    
+    // Shared ViewModels
+    val settingsViewModel: SettingsViewModel = viewModel { SettingsViewModel() }
+    val studioViewModel: StudioViewModel = viewModel { StudioViewModel() }
 
     AppTheme(darkTheme = isDarkMode) {
         Surface(
@@ -89,9 +96,9 @@ fun App() {
                     // Screen Content
                     Box(modifier = Modifier.fillMaxSize()) {
                         when (currentScreen) {
-                            Screen.Studio -> StudioScreen()
+                            Screen.Studio -> StudioScreen(studioViewModel, settingsViewModel)
                             Screen.Voices -> VoicesScreen()
-                            Screen.Setup -> SetupScreen()
+                            Screen.Setup -> SetupScreen(settingsViewModel)
                         }
                     }
                 }

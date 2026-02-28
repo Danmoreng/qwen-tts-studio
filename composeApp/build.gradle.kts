@@ -21,10 +21,13 @@ kotlin {
             implementation(compose.components.uiToolingPreview)
             implementation(libs.androidx.lifecycle.viewmodel.compose)
             implementation(compose.materialIconsExtended)
+            implementation(libs.kotlinx.coroutines.core)
         }
         
         desktopMain.dependencies {
             implementation(compose.desktop.currentOs)
+            implementation(libs.jna)
+            implementation(libs.kotlinx.coroutines.swing)
         }
     }
 }
@@ -32,6 +35,8 @@ kotlin {
 compose.desktop {
     application {
         mainClass = "com.qwen.tts.studio.MainKt"
+
+        jvmArgs += "-Djna.tmpdir=${project.projectDir.absolutePath}/.jna"
 
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
