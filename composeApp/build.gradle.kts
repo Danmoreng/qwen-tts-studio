@@ -37,6 +37,8 @@ compose.desktop {
         mainClass = "com.qwen.tts.studio.MainKt"
 
         jvmArgs += "-Djna.tmpdir=${project.projectDir.absolutePath}/.jna"
+        jvmArgs += "-Xss16m"
+        jvmArgs += "-Djna.protected=false"
 
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)

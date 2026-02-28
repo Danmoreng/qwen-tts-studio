@@ -4,11 +4,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.qwen.tts.studio.engine.QwenEngine
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.Executors
 import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.DataLine
@@ -30,6 +32,12 @@ class StudioViewModel : ViewModel() {
 
     private val qwenEngine = QwenEngine()
     private var lastGeneratedAudio: FloatArray? = null
+    private val nativeDispatcher = Executors.newSingleThreadExecutor { runnable ->
+        // Native model loading can require a deeper stack than coroutine scheduler worker threads.
+        Thread(null, runnable, "QwenNativeThread", 8L * 1024 * 1024).apply {
+            isDaemon = true
+        }
+    }.asCoroutineDispatcher()
 
     fun onTextChange(newText: String) {
         if (newText.length <= 5000) {
@@ -58,12 +66,16 @@ class StudioViewModel : ViewModel() {
             
             try {
                 withContext(Dispatchers.IO) {
-                    val loaded = qwenEngine.load(modelDir)
+                    val loaded = withContext(nativeDispatcher) {
+                        qwenEngine.load(modelDir)
+                    }
                     if (!loaded) {
                         throw Exception("Failed to load Qwen3 models from directory.")
                     }
 
-                    val audio = qwenEngine.generate(currentState.text)
+                    val audio = withContext(nativeDispatcher) {
+                        qwenEngine.generate(currentState.text)
+                    }
                     if (audio != null) {
                         lastGeneratedAudio = audio
                         playAudio(audio)
@@ -112,5 +124,6 @@ class StudioViewModel : ViewModel() {
     override fun onCleared() {
         super.onCleared()
         qwenEngine.release()
+        nativeDispatcher.close()
     }
 }
