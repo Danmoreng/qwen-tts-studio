@@ -9,12 +9,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.qwen.tts.studio.util.FilePicker
+import com.qwen.tts.studio.viewmodel.SettingsViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SetupScreen() {
-    var modelPath by remember { mutableStateOf("/models/qwen3-tts-q4_k_m.gguf") }
-    var selectedAcceleration by remember { mutableStateOf("CPU (AVX2)") }
+fun SetupScreen(viewModel: SettingsViewModel) {
+    val modelDir by viewModel.modelDir.collectAsState()
+    val selectedAcceleration by viewModel.acceleration.collectAsState()
 
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -29,18 +32,25 @@ fun SetupScreen() {
                 Text("Local Model Configuration", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Qwen3 Model Path (.bin / .gguf)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Qwen3 Model Directory", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "Select the folder containing 'qwen3-tts-0.6b-f16.gguf' and 'qwen3-tts-tokenizer-f16.gguf'",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         OutlinedTextField(
-                            value = modelPath,
-                            onValueChange = { modelPath = it },
+                            value = modelDir,
+                            onValueChange = { viewModel.setModelDir(it) },
                             modifier = Modifier.weight(1f),
                             singleLine = true,
-                            readOnly = true,
+                            placeholder = { Text("Select folder...") },
                             shape = MaterialTheme.shapes.medium
                         )
                         Button(
-                            onClick = { /* Browse */ },
+                            onClick = { 
+                                FilePicker.pickDirectory("Select Qwen3 Model Directory") { viewModel.setModelDir(it) }
+                            },
                             shape = MaterialTheme.shapes.medium,
                             modifier = Modifier.height(56.dp)
                         ) {
@@ -76,7 +86,7 @@ fun SetupScreen() {
                                 DropdownMenuItem(
                                     text = { Text(selectionOption) },
                                     onClick = {
-                                        selectedAcceleration = selectionOption
+                                        viewModel.setAcceleration(selectionOption)
                                         expanded = false
                                     }
                                 )

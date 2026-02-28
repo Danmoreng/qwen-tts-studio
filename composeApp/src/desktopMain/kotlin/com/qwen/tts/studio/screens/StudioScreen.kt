@@ -1,5 +1,6 @@
 package com.qwen.tts.studio.screens
 
+import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -7,6 +8,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeMute
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,19 +20,22 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-
-import androidx.lifecycle.viewmodel.compose.viewModel
+import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import com.qwen.tts.studio.viewmodel.StudioViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun StudioScreen(viewModel: StudioViewModel = viewModel { StudioViewModel() }) {
+fun StudioScreen(
+    viewModel: StudioViewModel,
+    settingsViewModel: SettingsViewModel
+) {
     val uiState by viewModel.uiState.collectAsState()
+    val modelDir by settingsViewModel.modelDir.collectAsState()
 
     val emotions = listOf(
-        Emotion("Neutral", Icons.Default.VolumeUp),
+        Emotion("Neutral", Icons.AutoMirrored.Filled.VolumeUp),
         Emotion("Happy", Icons.Default.SentimentSatisfied),
-        Emotion("Whisper", Icons.Default.VolumeMute),
+        Emotion("Whisper", Icons.AutoMirrored.Filled.VolumeMute),
         Emotion("Dynamic", Icons.Default.Bolt)
     )
 
@@ -40,6 +46,30 @@ fun StudioScreen(viewModel: StudioViewModel = viewModel { StudioViewModel() }) {
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
+        // Error Display
+        AnimatedVisibility(
+            visible = uiState.error != null,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut()
+        ) {
+            uiState.error?.let {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(Icons.Default.Error, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                        Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onErrorContainer)
+                    }
+                }
+            }
+        }
+
         // Controls Row
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -133,7 +163,7 @@ fun StudioScreen(viewModel: StudioViewModel = viewModel { StudioViewModel() }) {
                     )
                     
                     Button(
-                        onClick = { viewModel.generateAudio() },
+                        onClick = { viewModel.generateAudio(modelDir) },
                         enabled = uiState.text.isNotBlank() && !uiState.isGenerating,
                         contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
                     ) {
@@ -167,13 +197,17 @@ fun StudioScreen(viewModel: StudioViewModel = viewModel { StudioViewModel() }) {
                     modifier = Modifier.size(48.dp),
                     colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
                 ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                    if (uiState.isPlaying) {
+                        Icon(Icons.Default.Square, contentDescription = "Stop", tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                    } else {
+                        Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                    }
                 }
 
                 // Waveform Canvas
-                Waveform(modifier = Modifier.weight(1f), isActive = uiState.isGenerating)
+                Waveform(modifier = Modifier.weight(1f), isActive = uiState.isGenerating || uiState.isPlaying)
 
-                Text("0:04 / 0:12", style = MaterialTheme.typography.labelMedium, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                Text(if (uiState.isPlaying) "Playing..." else "Ready", style = MaterialTheme.typography.labelMedium, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
                 
                 IconButton(onClick = { /* Export */ }) {
                     Icon(Icons.Default.Download, contentDescription = "Export")

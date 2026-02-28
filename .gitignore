@@ -22,3 +22,10 @@ Thumbs.db
 local.properties
 .DS_Store
 composeApp/build/
+.jna/
+*.dll
+*.exp
+*.lib
+*.wav
+output.wav
+external/build/
