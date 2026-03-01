@@ -99,7 +99,7 @@ fun App() {
                     Box(modifier = Modifier.fillMaxSize()) {
                         when (currentScreen) {
                             Screen.Studio -> StudioScreen(studioViewModel, settingsViewModel, voicesViewModel)
-                            Screen.Voices -> VoicesScreen(voicesViewModel)
+                            Screen.Voices -> VoicesScreen(voicesViewModel, settingsViewModel)
                             Screen.Setup -> SetupScreen(settingsViewModel)
                         }
                     }

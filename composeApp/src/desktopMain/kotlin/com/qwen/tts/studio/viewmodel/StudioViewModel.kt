@@ -48,7 +48,7 @@ class StudioViewModel : ViewModel() {
         _uiState.value = _uiState.value.copy(selectedVoice = newVoice)
     }
 
-    fun generateAudio(modelDir: String, referenceWav: String?) {
+    fun generateAudio(modelDir: String, speakerEmbeddingPath: String?, referenceWav: String?) {
         val currentState = _uiState.value
         if (currentState.text.isBlank() || currentState.isGenerating) return
         if (modelDir.isBlank()) {
@@ -69,7 +69,11 @@ class StudioViewModel : ViewModel() {
                     }
 
                     val audio = withContext(nativeDispatcher) {
-                        qwenEngine.generate(currentState.text, referenceWav)
+                        qwenEngine.generate(
+                            text = currentState.text,
+                            referenceWav = referenceWav,
+                            speakerEmbeddingPath = speakerEmbeddingPath
+                        )
                     }
                     if (audio != null) {
                         lastGeneratedAudio = audio

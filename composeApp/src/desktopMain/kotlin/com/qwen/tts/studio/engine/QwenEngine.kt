@@ -128,7 +128,14 @@ class QwenEngine {
     private external fun nativeInit(): Long
     private external fun nativeFree(ptr: Long)
     private external fun nativeLoadModels(ptr: Long, modelDir: String): Boolean
-    private external fun nativeSynthesize(ptr: Long, text: String, referenceWav: String?, params: Any?): NativeResult?
+    private external fun nativeSynthesize(
+        ptr: Long,
+        text: String,
+        referenceWav: String?,
+        speakerEmbeddingPath: String?,
+        params: Any?
+    ): NativeResult?
+    private external fun nativeExtractSpeakerEmbedding(ptr: Long, referenceWav: String, outputPath: String): Boolean
 
     fun load(modelDir: String): Boolean {
         if (!File(modelDir).exists() || !File(modelDir).isDirectory) return false
@@ -170,15 +177,19 @@ class QwenEngine {
         }
     }
 
-    fun generate(text: String, referenceWav: String? = null): FloatArray? {
+    fun generate(
+        text: String,
+        referenceWav: String? = null,
+        speakerEmbeddingPath: String? = null
+    ): FloatArray? {
         if (useCliFallback) {
-            return generateViaCli(text, referenceWav)
+            return generateViaCli(text, referenceWav, speakerEmbeddingPath)
         }
 
         if (nativePtr == 0L) return null
 
         return try {
-            val result = nativeSynthesize(nativePtr, text, referenceWav, null)
+            val result = nativeSynthesize(nativePtr, text, referenceWav, speakerEmbeddingPath, null)
             if (result != null && result.success) {
                 result.audio
             } else {
@@ -200,7 +211,24 @@ class QwenEngine {
         }
     }
 
-    private fun generateViaCli(text: String, referenceWav: String?): FloatArray? {
+    fun extractSpeakerEmbedding(referenceWav: String, outputPath: String): Boolean {
+        if (referenceWav.isBlank() || outputPath.isBlank()) return false
+
+        if (useCliFallback) {
+            return extractSpeakerEmbeddingViaCli(referenceWav, outputPath)
+        }
+
+        if (nativePtr == 0L) return false
+
+        return try {
+            nativeExtractSpeakerEmbedding(nativePtr, referenceWav, outputPath)
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    private fun generateViaCli(text: String, referenceWav: String?, speakerEmbeddingPath: String?): FloatArray? {
         val modelDir = loadedModelDir ?: return null
         val root = try { resolveNativeRoot() } catch (e: Exception) { File(".") }
         val cliExe = resolveCliExe(root) ?: return null
@@ -215,7 +243,9 @@ class QwenEngine {
             "-t", text,
             "-o", outputFile.absolutePath
         )
-        if (!referenceWav.isNullOrBlank()) {
+        if (!speakerEmbeddingPath.isNullOrBlank()) {
+            command += listOf("--speaker-embedding", speakerEmbeddingPath)
+        } else if (!referenceWav.isNullOrBlank()) {
             command += listOf("-r", referenceWav)
         }
 
@@ -239,6 +269,38 @@ class QwenEngine {
         } finally {
             outputFile.delete()
         }
+    }
+
+    private fun extractSpeakerEmbeddingViaCli(referenceWav: String, outputPath: String): Boolean {
+        val modelDir = loadedModelDir ?: return false
+        val root = try { resolveNativeRoot() } catch (e: Exception) { File(".") }
+        val cliExe = resolveCliExe(root) ?: return false
+        val tempDir = File(root, ".tts-cli")
+        if (!tempDir.exists()) tempDir.mkdirs()
+
+        val command = listOf(
+            cliExe.absolutePath,
+            "-m", modelDir,
+            "-t", "embedding extraction",
+            "-r", referenceWav,
+            "--dump-speaker-embedding", outputPath,
+            "-o", File(tempDir, "embedding-${System.nanoTime()}.wav").absolutePath
+        )
+
+        val process = ProcessBuilder(command)
+            .directory(root)
+            .redirectErrorStream(true)
+            .start()
+        val processOutput = process.inputStream.bufferedReader().use { it.readText() }
+        val exitCode = process.waitFor()
+        if (exitCode != 0) {
+            System.err.println("[QwenEngine] CLI embedding extraction failed (exit=$exitCode).")
+            if (processOutput.isNotBlank()) {
+                System.err.println(processOutput)
+            }
+            return false
+        }
+        return File(outputPath).exists()
     }
 
     private fun readWavToFloatArray(file: File): FloatArray {
