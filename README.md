@@ -22,6 +22,7 @@ Qwen-TTS Studio is a native, minimalist desktop application for Windows and Linu
 - **JDK 17 or newer**
 - **Windows** (10/11) or **Linux** (Ubuntu/Debian preferred)
 - **Hardware:** Modern CPU/GPU for efficient inference.
+- **Build tools for native backend:** CMake + MSVC Build Tools (Windows)
 
 ## 🏗️ Getting Started
 
@@ -38,6 +39,37 @@ Currently, the project is in the initial development phase. Refer to the [Develo
    ```bash
    ./gradlew run
    ```
+
+### One-command Windows build (native + app)
+
+```powershell
+.\scripts\build-native.ps1
+.\gradlew.bat :composeApp:run
+```
+
+### Windows packaging
+
+Build portable app folder:
+
+```powershell
+.\scripts\package-windows.ps1
+```
+
+Build portable app + MSI installer:
+
+```powershell
+.\scripts\package-windows.ps1 -BuildMsi
+```
+
+Outputs:
+- Portable app: `composeApp\build\compose\binaries\main\app\qwen-tts-studio`
+- MSI: `composeApp\build\compose\binaries\main\msi`
+
+Notes:
+- `package-windows.ps1` first rebuilds the native `qwen3_tts.dll` + `ggml*.dll`.
+- It then copies those DLLs into the packaged app directory so the launcher can find them.
+- It auto-detects Java from `JAVA_HOME`, `java` on `PATH`, Android Studio JBR, or `%USERPROFILE%\.gradle\jdks`.
+- It retries Gradle packaging with extended network timeouts (helpful for WiX download timeouts).
 
 ## 📜 License
 
