@@ -31,9 +31,11 @@ enum class Screen(val label: String, val icon: ImageVector) {
 
 @Composable
 @Preview
-fun App() {
+fun App(
+    isDarkMode: Boolean = true,
+    onThemeToggle: () -> Unit = {}
+) {
     var currentScreen by remember { mutableStateOf(Screen.Studio) }
-    var isDarkMode by remember { mutableStateOf(true) }
     
     // Shared ViewModels
     val settingsViewModel: SettingsViewModel = viewModel { SettingsViewModel() }
@@ -81,7 +83,7 @@ fun App() {
                     Spacer(Modifier.weight(1f))
                     
                     // Theme Toggle
-                    IconButton(onClick = { isDarkMode = !isDarkMode }) {
+                    IconButton(onClick = onThemeToggle) {
                         Icon(
                             if (isDarkMode) Icons.Default.LightMode else Icons.Default.DarkMode,
                             contentDescription = "Toggle Theme"
