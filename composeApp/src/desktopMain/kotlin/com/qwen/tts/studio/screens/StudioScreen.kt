@@ -149,9 +149,10 @@ fun StudioScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
+                    val speakerEmbeddingPath = voicesViewModel.speakerEmbeddingForVoice(uiState.selectedVoice)
                     val referenceWav = voicesViewModel.referenceForVoice(uiState.selectedVoice)
                     Button(
-                        onClick = { viewModel.generateAudio(modelDir, referenceWav) },
+                        onClick = { viewModel.generateAudio(modelDir, speakerEmbeddingPath, referenceWav) },
                         enabled = uiState.text.isNotBlank() && !uiState.isGenerating,
                         contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
                     ) {

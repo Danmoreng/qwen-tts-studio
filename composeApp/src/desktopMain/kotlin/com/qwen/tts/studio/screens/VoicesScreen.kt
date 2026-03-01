@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -26,16 +27,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.qwen.tts.studio.util.FilePicker
+import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import com.qwen.tts.studio.viewmodel.VoicePreset
 import com.qwen.tts.studio.viewmodel.VoicesViewModel
 import java.io.File
 
 @Composable
-fun VoicesScreen(viewModel: VoicesViewModel) {
+fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewModel) {
     val voices by viewModel.voices.collectAsState()
+    val isCreating by viewModel.isCreating.collectAsState()
+    val error by viewModel.error.collectAsState()
+    val modelDir by settingsViewModel.modelDir.collectAsState()
     var presetName by remember { mutableStateOf("") }
     var referencePath by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier = Modifier
@@ -89,17 +93,21 @@ fun VoicesScreen(viewModel: VoicesViewModel) {
                     onClick = {
                         val fallbackName = File(referencePath).nameWithoutExtension
                         val nameToUse = presetName.ifBlank { fallbackName }
-                        error = viewModel.addVoicePreset(nameToUse, referencePath)
-                        if (error == null) {
-                            presetName = ""
-                            referencePath = ""
-                        }
+                        viewModel.createVoicePreset(nameToUse, referencePath, modelDir)
+                        presetName = ""
+                        referencePath = ""
                     },
-                    enabled = referencePath.isNotBlank()
+                    enabled = referencePath.isNotBlank() && !isCreating
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Create Preset")
+                    if (isCreating) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Extracting Embedding...")
+                    } else {
+                        Icon(Icons.Default.Add, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Create Preset")
+                    }
                 }
             }
         }
@@ -138,7 +146,7 @@ private fun VoicePresetCard(
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(preset.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Text(
-                    if (preset.isSystem) "Built-in model voice" else "Reference: ${preset.referenceWav}",
+                    if (preset.isSystem) "Built-in model voice" else "Embedding: ${preset.speakerEmbeddingPath}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
