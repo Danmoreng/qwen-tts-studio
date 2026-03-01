@@ -19,7 +19,7 @@ Qwen-TTS Studio is a native, minimalist desktop application for Windows and Linu
 
 ## 📋 Requirements
 
-- **JDK 17 or newer**
+- **JDK 17 or newer** (full JDK with JNI headers/libs for native build)
 - **Windows** (10/11) or **Linux** (Ubuntu/Debian preferred)
 - **Hardware:** Modern CPU/GPU for efficient inference.
 - **Build tools for native backend:** CMake + MSVC Build Tools (Windows)
@@ -47,12 +47,51 @@ Currently, the project is in the initial development phase. Refer to the [Develo
 .\gradlew.bat :composeApp:run
 ```
 
+CUDA build:
+
+```powershell
+.\scripts\build-native.ps1 -Cuda
+.\gradlew.bat :composeApp:run
+```
+
+Force Ninja generator:
+
+```powershell
+.\scripts\build-native.ps1 -Cuda -UseNinja
+```
+
+Android Studio / Gradle task equivalents:
+
+```powershell
+.\gradlew.bat nativeBuild
+.\gradlew.bat nativeBuildCuda
+```
+
 ### Windows packaging
 
 Build portable app folder:
 
 ```powershell
 .\scripts\package-windows.ps1
+```
+
+Build portable app folder with CUDA backend:
+
+```powershell
+.\scripts\package-windows.ps1 -Cuda
+```
+
+Use Ninja for native build during packaging:
+
+```powershell
+.\scripts\package-windows.ps1 -Cuda -UseNinja
+```
+
+Gradle task equivalents:
+
+```powershell
+.\gradlew.bat packageWindows
+.\gradlew.bat packageWindowsCuda
 ```
 
 Build portable app + MSI installer:
@@ -70,6 +109,7 @@ Notes:
 - It then copies those DLLs into the packaged app directory so the launcher can find them.
 - It auto-detects Java from `JAVA_HOME`, `java` on `PATH`, Android Studio JBR, or `%USERPROFILE%\.gradle\jdks`.
 - It retries Gradle packaging with extended network timeouts (helpful for WiX download timeouts).
+- For CUDA builds, `build-native.ps1 -Cuda` uses `external/build-cuda` and deploys `ggml-cuda.dll` (+ available CUDA runtime DLLs).
 
 ## 📜 License
 

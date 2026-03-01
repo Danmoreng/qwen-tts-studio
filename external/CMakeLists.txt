@@ -15,7 +15,11 @@ endif()
 
 # Forward CUDA option to the submodule
 option(QWEN3_TTS_CUDA "Enable CUDA backend" OFF)
-set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+if(QWEN3_TTS_CUDA)
+    set(GGML_CUDA ON CACHE BOOL "" FORCE)
+else()
+    set(GGML_CUDA OFF CACHE BOOL "" FORCE)
+endif()
 
 # Enable JNI
 find_package(JNI REQUIRED)
@@ -30,8 +34,13 @@ add_library(qwen3_tts_shared SHARED
     qwen3-tts-cpp/src/qwen3_tts_jni.cpp
 )
 
-# Set the output name to match what JNA/JNI expects: qwen3_tts.dll
-set_target_properties(qwen3_tts_shared PROPERTIES OUTPUT_NAME "qwen3_tts")
+# Set the output name to match what JNA/JNI expects: qwen3_tts.dll.
+# On Windows + Ninja (single-config), avoid import-lib name collision with
+# the static submodule target `qwen3_tts` (both would otherwise emit qwen3_tts.lib).
+set_target_properties(qwen3_tts_shared PROPERTIES
+    OUTPUT_NAME "qwen3_tts"
+    ARCHIVE_OUTPUT_NAME "qwen3_tts_jni_import"
+)
 
 # Include directories
 target_include_directories(qwen3_tts_shared PRIVATE 
