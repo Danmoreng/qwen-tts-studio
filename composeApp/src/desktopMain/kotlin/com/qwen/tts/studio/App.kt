@@ -20,6 +20,7 @@ import com.qwen.tts.studio.screens.VoicesScreen
 import com.qwen.tts.studio.theme.AppTheme
 import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import com.qwen.tts.studio.viewmodel.StudioViewModel
+import com.qwen.tts.studio.viewmodel.VoicesViewModel
 import org.jetbrains.compose.ui.tooling.preview.Preview
 
 enum class Screen(val label: String, val icon: ImageVector) {
@@ -37,6 +38,7 @@ fun App() {
     // Shared ViewModels
     val settingsViewModel: SettingsViewModel = viewModel { SettingsViewModel() }
     val studioViewModel: StudioViewModel = viewModel { StudioViewModel() }
+    val voicesViewModel: VoicesViewModel = viewModel { VoicesViewModel() }
 
     AppTheme(darkTheme = isDarkMode) {
         Surface(
@@ -91,13 +93,13 @@ fun App() {
                 // Main Content
                 Column(modifier = Modifier.fillMaxSize()) {
                     // Header
-                    Header(currentScreen, isDarkMode)
+                    Header(currentScreen)
 
                     // Screen Content
                     Box(modifier = Modifier.fillMaxSize()) {
                         when (currentScreen) {
-                            Screen.Studio -> StudioScreen(studioViewModel, settingsViewModel)
-                            Screen.Voices -> VoicesScreen()
+                            Screen.Studio -> StudioScreen(studioViewModel, settingsViewModel, voicesViewModel)
+                            Screen.Voices -> VoicesScreen(voicesViewModel)
                             Screen.Setup -> SetupScreen(settingsViewModel)
                         }
                     }
@@ -108,7 +110,7 @@ fun App() {
 }
 
 @Composable
-fun Header(screen: Screen, isDarkMode: Boolean) {
+fun Header(screen: Screen) {
     Surface(
         modifier = Modifier.fillMaxWidth().height(64.dp),
         color = MaterialTheme.colorScheme.surface,
@@ -128,48 +130,6 @@ fun Header(screen: Screen, isDarkMode: Boolean) {
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold
             )
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // Hardware Monitor Mockup
-                Surface(
-                    color = MaterialTheme.colorScheme.background,
-                    shape = MaterialTheme.shapes.small,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(Icons.Default.Analytics, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary)
-                        Text("RAM: 2.4 GB", style = MaterialTheme.typography.labelSmall, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
-                        VerticalDivider(modifier = Modifier.height(12.dp).width(1.dp))
-                        Text("CPU: 2%", style = MaterialTheme.typography.labelSmall, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
-                    }
-                }
-
-                Spacer(Modifier.width(16.dp))
-
-                // Status Indicator
-                val statusBgColor = if (isDarkMode) Color(0xFF1B3921) else Color(0xFFE8F5E9)
-                val statusTextColor = if (isDarkMode) Color(0xFF81C784) else Color(0xFF2E7D32)
-                val statusDotColor = Color(0xFF4CAF50)
-
-                Surface(
-                    color = statusBgColor,
-                    shape = androidx.compose.foundation.shape.CircleShape,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, statusTextColor.copy(alpha = 0.2f))
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Box(modifier = Modifier.size(8.dp).background(statusDotColor, shape = androidx.compose.foundation.shape.CircleShape))
-                        Text("Engine Ready", color = statusTextColor, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium)
-                    }
-                }
-            }
         }
     }
 }

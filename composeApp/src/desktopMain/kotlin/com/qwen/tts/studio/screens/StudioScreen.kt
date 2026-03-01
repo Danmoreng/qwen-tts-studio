@@ -1,43 +1,43 @@
 package com.qwen.tts.studio.screens
 
-import androidx.compose.animation.*
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.VolumeMute
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import com.qwen.tts.studio.viewmodel.StudioViewModel
+import com.qwen.tts.studio.viewmodel.VoicesViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StudioScreen(
     viewModel: StudioViewModel,
-    settingsViewModel: SettingsViewModel
+    settingsViewModel: SettingsViewModel,
+    voicesViewModel: VoicesViewModel
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val modelDir by settingsViewModel.modelDir.collectAsState()
+    val voices by voicesViewModel.voices.collectAsState()
 
-    val emotions = listOf(
-        Emotion("Neutral", Icons.AutoMirrored.Filled.VolumeUp),
-        Emotion("Happy", Icons.Default.SentimentSatisfied),
-        Emotion("Whisper", Icons.AutoMirrored.Filled.VolumeMute),
-        Emotion("Dynamic", Icons.Default.Bolt)
-    )
+    LaunchedEffect(uiState.selectedVoice, voices) {
+        if (voices.none { it.name == uiState.selectedVoice } && voices.isNotEmpty()) {
+            viewModel.onVoiceChange(voices.first().name)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -100,28 +100,15 @@ fun StudioScreen(
                         }
                     }
                     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                        DropdownMenuItem(
-                            text = { Text("Default Voice (EN)") },
-                            onClick = { viewModel.onVoiceChange("Default Voice (EN)"); expanded = false }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("My Voice (Clone)") },
-                            onClick = { viewModel.onVoiceChange("My Voice (Clone)"); expanded = false }
-                        )
-                    }
-                }
-
-                // Emotion Chips
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    emotions.forEach { emotion ->
-                        FilterChip(
-                            selected = uiState.selectedEmotion == emotion.name,
-                            onClick = { viewModel.onEmotionChange(emotion.name) },
-                            label = { Text(emotion.name) },
-                            leadingIcon = { Icon(emotion.icon, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                        )
+                        voices.forEach { voice ->
+                            DropdownMenuItem(
+                                text = { Text(voice.name) },
+                                onClick = {
+                                    viewModel.onVoiceChange(voice.name)
+                                    expanded = false
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -161,9 +148,10 @@ fun StudioScreen(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    
+
+                    val referenceWav = voicesViewModel.referenceForVoice(uiState.selectedVoice)
                     Button(
-                        onClick = { viewModel.generateAudio(modelDir) },
+                        onClick = { viewModel.generateAudio(modelDir, referenceWav) },
                         enabled = uiState.text.isNotBlank() && !uiState.isGenerating,
                         contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
                     ) {
@@ -181,76 +169,30 @@ fun StudioScreen(
             }
         }
 
-        // Player / Waveform
+        // Playback controls
         Card(
-            modifier = Modifier.fillMaxWidth().height(100.dp),
+            modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            border = androidx.compose.foundation.BorderStroke(1.dp, if (uiState.isGenerating) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
             Row(
-                modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(24.dp)
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                FilledIconButton(
-                    onClick = { /* Play/Pause */ },
-                    modifier = Modifier.size(48.dp),
-                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                Text(
+                    text = if (uiState.isPlaying) "Playing generated audio..." else "Ready",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                OutlinedButton(
+                    onClick = { viewModel.replayLastAudio() },
+                    enabled = !uiState.isPlaying
                 ) {
-                    if (uiState.isPlaying) {
-                        Icon(Icons.Default.Square, contentDescription = "Stop", tint = MaterialTheme.colorScheme.onPrimaryContainer)
-                    } else {
-                        Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = MaterialTheme.colorScheme.onPrimaryContainer)
-                    }
-                }
-
-                // Waveform Canvas
-                Waveform(modifier = Modifier.weight(1f), isActive = uiState.isGenerating || uiState.isPlaying)
-
-                Text(if (uiState.isPlaying) "Playing..." else "Ready", style = MaterialTheme.typography.labelMedium, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
-                
-                IconButton(onClick = { /* Export */ }) {
-                    Icon(Icons.Default.Download, contentDescription = "Export")
+                    Icon(Icons.Default.PlayArrow, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Replay Last Audio")
                 }
             }
-        }
-    }
-}
-
-data class Emotion(val name: String, val icon: androidx.compose.ui.graphics.vector.ImageVector)
-
-@Composable
-fun Waveform(modifier: Modifier = Modifier, isActive: Boolean) {
-    val infiniteTransition = rememberInfiniteTransition()
-    val animations = List(40) { i ->
-        infiniteTransition.animateFloat(
-            initialValue = 0.2f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 500 + (i * 20), easing = FastOutSlowInEasing),
-                repeatMode = RepeatMode.Reverse
-            )
-        )
-    }
-
-    Canvas(modifier = modifier.height(40.dp)) {
-        val width = size.width
-        val height = size.height
-        val barWidth = (width / 40) - 4.dp.toPx()
-        
-        for (i in 0 until 40) {
-            val barHeight = if (isActive) {
-                height * animations[i].value * (0.5f + (Math.random().toFloat() * 0.5f))
-            } else {
-                height * (0.2f + (Math.sin(i * 0.5).toFloat() * 0.3f + 0.3f))
-            }
-            
-            drawRoundRect(
-                color = if (isActive) Color(0xFF3B82F6) else Color.Gray.copy(alpha = 0.3f),
-                topLeft = androidx.compose.ui.geometry.Offset(i * (barWidth + 4.dp.toPx()), (height - barHeight) / 2),
-                size = androidx.compose.ui.geometry.Size(barWidth, barHeight),
-                cornerRadius = androidx.compose.ui.geometry.CornerRadius(4.dp.toPx())
-            )
         }
     }
 }
