@@ -23,9 +23,50 @@ class QwenEngine {
         val timeMs: Long
     )
 
+    data class NativeParams(
+        val languageId: Int = 2050, // Default to English
+        val maxAudioTokens: Int = 4096,
+        val temperature: Float = 0.9f,
+        val topP: Float = 1.0f,
+        val topK: Int = 50,
+        val threads: Int = 4
+    )
+
     companion object {
         private var isNativeLoaded = false
         private val loadLock = Any()
+
+        fun mapLanguageToId(lang: String): Int {
+            return when (lang.lowercase()) {
+                "en", "english" -> 2050
+                "ru", "russian" -> 2069
+                "zh", "chinese" -> 2055
+                "ja", "japanese" -> 2058
+                "ko", "korean" -> 2064
+                "de", "german" -> 2053
+                "fr", "french" -> 2061
+                "es", "spanish" -> 2054
+                "it", "italian" -> 2070
+                "pt", "portuguese" -> 2071
+                else -> 2050
+            }
+        }
+
+        fun mapIdToLanguageCode(id: Int): String {
+            return when (id) {
+                2050 -> "en"
+                2069 -> "ru"
+                2055 -> "zh"
+                2058 -> "ja"
+                2064 -> "ko"
+                2053 -> "de"
+                2061 -> "fr"
+                2054 -> "es"
+                2070 -> "it"
+                2071 -> "pt"
+                else -> "en"
+            }
+        }
 
         private fun resolveNativeRoot(): File {
             val userDir = File(System.getProperty("user.dir"))
@@ -180,16 +221,18 @@ class QwenEngine {
     fun generate(
         text: String,
         referenceWav: String? = null,
-        speakerEmbeddingPath: String? = null
+        speakerEmbeddingPath: String? = null,
+        languageId: Int = 2050
     ): FloatArray? {
         if (useCliFallback) {
-            return generateViaCli(text, referenceWav, speakerEmbeddingPath)
+            return generateViaCli(text, referenceWav, speakerEmbeddingPath, languageId)
         }
 
         if (nativePtr == 0L) return null
 
         return try {
-            val result = nativeSynthesize(nativePtr, text, referenceWav, speakerEmbeddingPath, null)
+            val params = NativeParams(languageId = languageId)
+            val result = nativeSynthesize(nativePtr, text, referenceWav, speakerEmbeddingPath, params)
             if (result != null && result.success) {
                 result.audio
             } else {
@@ -228,7 +271,7 @@ class QwenEngine {
         }
     }
 
-    private fun generateViaCli(text: String, referenceWav: String?, speakerEmbeddingPath: String?): FloatArray? {
+    private fun generateViaCli(text: String, referenceWav: String?, speakerEmbeddingPath: String?, languageId: Int): FloatArray? {
         val modelDir = loadedModelDir ?: return null
         val root = try { resolveNativeRoot() } catch (e: Exception) { File(".") }
         val cliExe = resolveCliExe(root) ?: return null
@@ -241,7 +284,8 @@ class QwenEngine {
             cliExe.absolutePath,
             "-m", modelDir,
             "-t", text,
-            "-o", outputFile.absolutePath
+            "-o", outputFile.absolutePath,
+            "-l", mapIdToLanguageCode(languageId)
         )
         if (!speakerEmbeddingPath.isNullOrBlank()) {
             command += listOf("--speaker-embedding", speakerEmbeddingPath)

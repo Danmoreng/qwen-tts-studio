@@ -19,6 +19,7 @@ import javax.sound.sampled.SourceDataLine
 data class StudioUiState(
     val text: String = "Another test bites the dust.",
     val selectedVoice: String = "Default Voice (Model)",
+    val selectedLanguage: String = "English",
     val isGenerating: Boolean = false,
     val isPlaying: Boolean = false,
     val progress: Float = 0f,
@@ -48,6 +49,10 @@ class StudioViewModel : ViewModel() {
         _uiState.value = _uiState.value.copy(selectedVoice = newVoice)
     }
 
+    fun onLanguageChange(newLanguage: String) {
+        _uiState.value = _uiState.value.copy(selectedLanguage = newLanguage)
+    }
+
     fun generateAudio(modelDir: String, speakerEmbeddingPath: String?, referenceWav: String?) {
         val currentState = _uiState.value
         if (currentState.text.isBlank() || currentState.isGenerating) return
@@ -68,11 +73,14 @@ class StudioViewModel : ViewModel() {
                         throw Exception("Failed to load Qwen3 models from directory.")
                     }
 
+                    val langId = QwenEngine.mapLanguageToId(currentState.selectedLanguage)
+
                     val audio = withContext(nativeDispatcher) {
                         qwenEngine.generate(
                             text = currentState.text,
                             referenceWav = referenceWav,
-                            speakerEmbeddingPath = speakerEmbeddingPath
+                            speakerEmbeddingPath = speakerEmbeddingPath,
+                            languageId = langId
                         )
                     }
                     if (audio != null) {
