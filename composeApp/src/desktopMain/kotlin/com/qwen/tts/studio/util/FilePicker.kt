@@ -21,6 +21,21 @@ object FilePicker {
         }
     }
 
+    fun saveFile(
+        title: String,
+        defaultName: String,
+        onFileSelected: (File) -> Unit
+    ) {
+        val dialog = FileDialog(null as Frame?, title, FileDialog.SAVE)
+        dialog.file = defaultName
+        dialog.isVisible = true
+        
+        if (dialog.directory != null && dialog.file != null) {
+            val file = File(dialog.directory, dialog.file)
+            onFileSelected(file)
+        }
+    }
+
     fun pickDirectory(
         title: String,
         onDirectoryPicked: (String) -> Unit

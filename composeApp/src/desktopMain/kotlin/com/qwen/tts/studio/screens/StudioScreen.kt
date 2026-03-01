@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.qwen.tts.studio.util.FilePicker
 import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import com.qwen.tts.studio.viewmodel.StudioViewModel
 import com.qwen.tts.studio.viewmodel.VoicesViewModel
@@ -254,16 +255,40 @@ fun StudioScreen(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = if (uiState.isPlaying) "Playing generated audio..." else "Ready",
+                    text = when {
+                        uiState.isSaving -> "Saving to file..."
+                        uiState.isPlaying -> "Playing generated audio..."
+                        uiState.hasAudio -> "Audio ready"
+                        else -> "Ready"
+                    },
                     style = MaterialTheme.typography.bodyMedium
                 )
-                OutlinedButton(
-                    onClick = { viewModel.replayLastAudio() },
-                    enabled = !uiState.isPlaying
-                ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Replay Last Audio")
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (uiState.hasAudio) {
+                        OutlinedButton(
+                            onClick = {
+                                FilePicker.saveFile(
+                                    title = "Save Generated Audio",
+                                    defaultName = "output.wav",
+                                    onFileSelected = { file -> viewModel.saveAudioToFile(file) }
+                                )
+                            },
+                            enabled = !uiState.isSaving
+                        ) {
+                            Icon(Icons.Default.Save, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Save to File")
+                        }
+                    }
+                    
+                    OutlinedButton(
+                        onClick = { viewModel.replayLastAudio() },
+                        enabled = !uiState.isPlaying && uiState.hasAudio
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Replay Last Audio")
+                    }
                 }
             }
         }
