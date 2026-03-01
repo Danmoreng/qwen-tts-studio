@@ -18,8 +18,7 @@ import javax.sound.sampled.SourceDataLine
 
 data class StudioUiState(
     val text: String = "Another test bites the dust.",
-    val selectedVoice: String = "Default Voice (EN)",
-    val selectedEmotion: String = "Neutral",
+    val selectedVoice: String = "Default Voice (Model)",
     val isGenerating: Boolean = false,
     val isPlaying: Boolean = false,
     val progress: Float = 0f,
@@ -49,11 +48,7 @@ class StudioViewModel : ViewModel() {
         _uiState.value = _uiState.value.copy(selectedVoice = newVoice)
     }
 
-    fun onEmotionChange(newEmotion: String) {
-        _uiState.value = _uiState.value.copy(selectedEmotion = newEmotion)
-    }
-
-    fun generateAudio(modelDir: String) {
+    fun generateAudio(modelDir: String, referenceWav: String?) {
         val currentState = _uiState.value
         if (currentState.text.isBlank() || currentState.isGenerating) return
         if (modelDir.isBlank()) {
@@ -74,7 +69,7 @@ class StudioViewModel : ViewModel() {
                     }
 
                     val audio = withContext(nativeDispatcher) {
-                        qwenEngine.generate(currentState.text)
+                        qwenEngine.generate(currentState.text, referenceWav)
                     }
                     if (audio != null) {
                         lastGeneratedAudio = audio
@@ -89,6 +84,12 @@ class StudioViewModel : ViewModel() {
                 _uiState.value = _uiState.value.copy(isGenerating = false)
             }
         }
+    }
+
+    fun replayLastAudio() {
+        val audio = lastGeneratedAudio ?: return
+        if (_uiState.value.isPlaying) return
+        playAudio(audio)
     }
 
     private fun playAudio(samples: FloatArray) {
