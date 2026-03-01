@@ -8,13 +8,13 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayInputStream
+import java.io.File
 import java.util.concurrent.Executors
-import javax.sound.sampled.AudioFormat
-import javax.sound.sampled.AudioSystem
-import javax.sound.sampled.DataLine
-import javax.sound.sampled.SourceDataLine
+import javax.sound.sampled.*
 
 data class StudioUiState(
     val text: String = "Another test bites the dust.",
@@ -23,6 +23,8 @@ data class StudioUiState(
     val selectedInstruction: String = "",
     val isGenerating: Boolean = false,
     val isPlaying: Boolean = false,
+    val isSaving: Boolean = false,
+    val hasAudio: Boolean = false,
     val progress: Float = 0f,
     val error: String? = null
 )
@@ -42,32 +44,32 @@ class StudioViewModel : ViewModel() {
 
     fun onTextChange(newText: String) {
         if (newText.length <= 5000) {
-            _uiState.value = _uiState.value.copy(text = newText, error = null)
+            _uiState.update { it.copy(text = newText, error = null) }
         }
     }
 
     fun onVoiceChange(newVoice: String) {
-        _uiState.value = _uiState.value.copy(selectedVoice = newVoice)
+        _uiState.update { it.copy(selectedVoice = newVoice) }
     }
 
     fun onLanguageChange(newLanguage: String) {
-        _uiState.value = _uiState.value.copy(selectedLanguage = newLanguage)
+        _uiState.update { it.copy(selectedLanguage = newLanguage) }
     }
 
     fun onInstructionChange(newInstruction: String) {
-        _uiState.value = _uiState.value.copy(selectedInstruction = newInstruction)
+        _uiState.update { it.copy(selectedInstruction = newInstruction) }
     }
 
     fun generateAudio(modelDir: String, speakerEmbeddingPath: String?, referenceWav: String?) {
         val currentState = _uiState.value
         if (currentState.text.isBlank() || currentState.isGenerating) return
         if (modelDir.isBlank()) {
-            _uiState.value = _uiState.value.copy(error = "Please select the Model Directory in Setup.")
+            _uiState.update { it.copy(error = "Please select the Model Directory in Setup.") }
             return
         }
 
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isGenerating = true, error = null)
+            _uiState.update { it.copy(isGenerating = true, error = null, hasAudio = false) }
             
             try {
                 withContext(Dispatchers.IO) {
@@ -78,28 +80,31 @@ class StudioViewModel : ViewModel() {
                         throw Exception("Failed to load Qwen3 models from directory.")
                     }
 
-                    val langId = QwenEngine.mapLanguageToId(currentState.selectedLanguage)
+                    // Re-read state in case it changed during load
+                    val latestState = _uiState.value
+                    val langId = QwenEngine.mapLanguageToId(latestState.selectedLanguage)
 
                     val audio = withContext(nativeDispatcher) {
                         qwenEngine.generate(
-                            text = currentState.text,
+                            text = latestState.text,
                             referenceWav = referenceWav,
                             speakerEmbeddingPath = speakerEmbeddingPath,
                             languageId = langId,
-                            instruction = currentState.selectedInstruction.takeIf { it.isNotBlank() }
+                            instruction = latestState.selectedInstruction.takeIf { it.isNotBlank() }
                         )
                     }
                     if (audio != null) {
                         lastGeneratedAudio = audio
+                        _uiState.update { it.copy(hasAudio = true) }
                         playAudio(audio)
                     } else {
                         throw Exception("Generation failed.")
                     }
                 }
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(error = e.message)
+            } catch (e: Throwable) {
+                _uiState.update { it.copy(error = e.message ?: "Unknown error occurred") }
             } finally {
-                _uiState.value = _uiState.value.copy(isGenerating = false)
+                _uiState.update { it.copy(isGenerating = false) }
             }
         }
     }
@@ -110,10 +115,36 @@ class StudioViewModel : ViewModel() {
         playAudio(audio)
     }
 
+    fun saveAudioToFile(file: File) {
+        val samples = lastGeneratedAudio ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            _uiState.update { it.copy(isSaving = true) }
+            try {
+                val format = AudioFormat(24000f, 16, 1, true, false)
+                val buffer = ByteArray(samples.size * 2)
+                for (i in samples.indices) {
+                    val sample = (samples[i] * 32767).toInt().coerceIn(-32768, 32767)
+                    buffer[i * 2] = (sample and 0xFF).toByte()
+                    buffer[i * 2 + 1] = ((sample shr 8) and 0xFF).toByte()
+                }
+                
+                ByteArrayInputStream(buffer).use { bais ->
+                    AudioInputStream(bais, format, samples.size.toLong()).use { ais ->
+                        AudioSystem.write(ais, AudioFileFormat.Type.WAVE, file)
+                    }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(error = "Failed to save audio: ${e.message}") }
+            } finally {
+                _uiState.update { it.copy(isSaving = false) }
+            }
+        }
+    }
+
     private fun playAudio(samples: FloatArray) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                _uiState.value = _uiState.value.copy(isPlaying = true)
+                _uiState.update { it.copy(isPlaying = true) }
                 
                 val format = AudioFormat(24000f, 16, 1, true, false)
                 val info = DataLine.Info(SourceDataLine::class.java, format)
@@ -135,7 +166,7 @@ class StudioViewModel : ViewModel() {
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
-                _uiState.value = _uiState.value.copy(isPlaying = false)
+                _uiState.update { it.copy(isPlaying = false) }
             }
         }
     }
