@@ -1,59 +1,30 @@
 package com.qwen.tts.studio.engine
 
-import com.sun.jna.Memory
-import com.sun.jna.NativeLibrary
-import com.sun.jna.Pointer
-import com.sun.jna.Function
-import com.sun.jna.ptr.IntByReference
 import java.io.File
-import java.nio.charset.StandardCharsets
 import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioSystem
 
-private class Qwen3Native(private val lib: NativeLibrary) {
-    private val backendInitFn = lib.getFunction("qwen3_tts_backend_init", Function.C_CONVENTION)
-    private val initFn = lib.getFunction("qwen3_tts_init", Function.C_CONVENTION)
-    private val generateFn = lib.getFunction("qwen3_tts_generate", Function.C_CONVENTION)
-    private val freeAudioFn = lib.getFunction("qwen3_tts_free_audio", Function.C_CONVENTION)
-    private val destroyFn = lib.getFunction("qwen3_tts_destroy", Function.C_CONVENTION)
-
-    fun backendInit() {
-        backendInitFn.invokeVoid(emptyArray())
-    }
-
-    fun init(modelDir: Pointer): Pointer? {
-        return initFn.invokePointer(arrayOf(modelDir))
-    }
-
-    fun generate(
-        engine: Pointer,
-        text: Pointer,
-        referenceWavPath: Pointer?,
-        outSize: IntByReference
-    ): Pointer? {
-        return generateFn.invokePointer(arrayOf(engine, text, referenceWavPath, outSize))
-    }
-
-    fun freeAudio(engine: Pointer) {
-        freeAudioFn.invokeVoid(arrayOf(engine))
-    }
-
-    fun destroy(engine: Pointer) {
-        destroyFn.invokeVoid(arrayOf(engine))
-    }
-}
-
 /**
- * High-level wrapper for the Qwen3 Engine.
+ * High-level wrapper for the Qwen3 Engine using JNI.
  */
 class QwenEngine {
-    private var enginePointer: Pointer? = null
+    private var nativePtr: Long = 0
     private var loadedModelDir: String? = null
     private var useCliFallback = false
 
+    /**
+     * Data class matching JNI constructor in qwen3_tts_jni.cpp
+     */
+    data class NativeResult(
+        val audio: FloatArray?,
+        val sampleRate: Int,
+        val success: Boolean,
+        val errorMsg: String?,
+        val timeMs: Long
+    )
+
     companion object {
-        private var isInitialized = false
-        private var native: Qwen3Native? = null
+        private var isNativeLoaded = false
         private val loadLock = Any()
 
         private fun resolveNativeRoot(): File {
@@ -78,44 +49,53 @@ class QwenEngine {
                 )
         }
 
-        private fun getNative(): Qwen3Native {
+        private fun ensureNativeLoaded() {
             synchronized(loadLock) {
-                if (native != null) return native!!
+                if (isNativeLoaded) return
+                try {
+                    val root = resolveNativeRoot()
+                    println("[QwenEngine] Root found at: ${root.absolutePath}")
 
-                val root = resolveNativeRoot()
+                    // Best-effort preload for common runtime/system libraries.
+                    val systemDeps = listOf("vcomp140", "Psapi")
+                    for (depName in systemDeps) {
+                        try {
+                            System.loadLibrary(depName)
+                            println("[QwenEngine] Loaded system library: $depName.dll")
+                        } catch (_: Throwable) {
+                            // Optional preload: these may already be present/loaded.
+                        }
+                    }
 
-                // Keep JNA extraction local and deterministic.
-                val localJnaDir = File(root, ".jna")
-                if (!localJnaDir.exists()) localJnaDir.mkdirs()
-                System.setProperty("jna.tmpdir", localJnaDir.absolutePath)
-                System.setProperty("jna.nosys", "true")
-                System.setProperty("jna.library.path", root.absolutePath)
+                    // Required native dependencies. Order matters:
+                    // ggml.dll imports ggml-cpu.dll, so ggml-cpu must be loaded first.
+                    val requiredDeps = listOf(
+                        "ggml-base.dll",
+                        "ggml-cpu.dll",
+                        "ggml.dll"
+                    )
+                    for (depName in requiredDeps) {
+                        val depFile = File(root, depName)
+                        if (!depFile.exists()) {
+                            throw IllegalStateException("Missing required dependency: ${depFile.absolutePath}")
+                        }
+                        try {
+                            System.load(depFile.absolutePath)
+                            println("[QwenEngine] Loaded dependency from root: $depName")
+                        } catch (e: Throwable) {
+                            throw IllegalStateException("Failed loading dependency: ${depFile.absolutePath}", e)
+                        }
+                    }
 
-                val qwenDll = File(root, "qwen3_tts.dll")
-                require(qwenDll.exists()) { "Missing native library: ${qwenDll.absolutePath}" }
-                println("[QwenEngine] NativeLibrary(abs): ${qwenDll.absolutePath}")
-                val library = NativeLibrary.getInstance(qwenDll.absolutePath)
-                native = Qwen3Native(library)
-
-                if (!isInitialized) {
-                    native!!.backendInit()
-                    isInitialized = true
+                    val dll = File(root, "qwen3_tts.dll")
+                    System.load(dll.absolutePath)
+                    isNativeLoaded = true
+                    println("[QwenEngine] JNI loaded successfully: ${dll.absolutePath}")
+                } catch (e: Throwable) {
+                    System.err.println("[QwenEngine] Failed to load JNI: ${e.message}")
+                    e.printStackTrace()
                 }
             }
-            return native!!
-        }
-
-        private fun toNativeCString(value: String): Memory {
-            val utf8 = value.toByteArray(StandardCharsets.UTF_8)
-            return Memory((utf8.size + 1).toLong()).apply {
-                write(0, utf8, 0, utf8.size)
-                setByte(utf8.size.toLong(), 0)
-            }
-        }
-
-        private fun toOptionalNativeCString(value: String?): Memory? {
-            if (value.isNullOrEmpty()) return null
-            return toNativeCString(value)
         }
 
         private fun resolveCliExe(root: File): File? {
@@ -129,6 +109,11 @@ class QwenEngine {
         }
     }
 
+    private external fun nativeInit(): Long
+    private external fun nativeFree(ptr: Long)
+    private external fun nativeLoadModels(ptr: Long, modelDir: String): Boolean
+    private external fun nativeSynthesize(ptr: Long, text: String, referenceWav: String?, params: Any?): NativeResult?
+
     fun load(modelDir: String): Boolean {
         if (!File(modelDir).exists() || !File(modelDir).isDirectory) return false
 
@@ -136,27 +121,35 @@ class QwenEngine {
         loadedModelDir = modelDir
         useCliFallback = false
 
+        ensureNativeLoaded()
+        
+        if (!isNativeLoaded) {
+            val root = try { resolveNativeRoot() } catch (e: Exception) { File(".") }
+            useCliFallback = resolveCliExe(root) != null
+            return useCliFallback
+        }
+
         return try {
-            val native = getNative()
-            val modelDirNative = toNativeCString(modelDir)
-            enginePointer = native.init(modelDirNative)
-            if (enginePointer != null) {
-                true
+            nativePtr = nativeInit()
+            if (nativePtr != 0L) {
+                val ok = nativeLoadModels(nativePtr, modelDir)
+                if (ok) {
+                    true
+                } else {
+                    release()
+                    val root = resolveNativeRoot()
+                    useCliFallback = resolveCliExe(root) != null
+                    useCliFallback
+                }
             } else {
                 val root = resolveNativeRoot()
                 useCliFallback = resolveCliExe(root) != null
-                if (useCliFallback) {
-                    println("[QwenEngine] Native init returned null, using CLI fallback.")
-                }
                 useCliFallback
             }
         } catch (e: Throwable) {
             e.printStackTrace()
             val root = resolveNativeRoot()
             useCliFallback = resolveCliExe(root) != null
-            if (useCliFallback) {
-                println("[QwenEngine] Native init failed, using CLI fallback.")
-            }
             useCliFallback
         }
     }
@@ -166,34 +159,34 @@ class QwenEngine {
             return generateViaCli(text, referenceWav)
         }
 
-        val pointer = enginePointer ?: return null
-        val outSizeRef = IntByReference()
+        if (nativePtr == 0L) return null
 
-        val native = getNative()
-        val textNative = toNativeCString(text)
-        val referenceNative = toOptionalNativeCString(referenceWav)
-
-        val audioPointer = native.generate(
-            pointer, textNative, referenceNative, outSizeRef
-        ) ?: return null
-
-        val size = outSizeRef.value
-        val result = audioPointer.getFloatArray(0, size)
-        
-        native.freeAudio(pointer)
-        return result
+        return try {
+            val result = nativeSynthesize(nativePtr, text, referenceWav, null)
+            if (result != null && result.success) {
+                result.audio
+            } else {
+                if (result != null) {
+                    System.err.println("[QwenEngine] Native synthesis failed: ${result.errorMsg}")
+                }
+                null
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            null
+        }
     }
 
     fun release() {
-        enginePointer?.let {
-            getNative().destroy(it)
-            enginePointer = null
+        if (nativePtr != 0L) {
+            nativeFree(nativePtr)
+            nativePtr = 0L
         }
     }
 
     private fun generateViaCli(text: String, referenceWav: String?): FloatArray? {
         val modelDir = loadedModelDir ?: return null
-        val root = resolveNativeRoot()
+        val root = try { resolveNativeRoot() } catch (e: Exception) { File(".") }
         val cliExe = resolveCliExe(root) ?: return null
 
         val tempDir = File(root, ".tts-cli")
