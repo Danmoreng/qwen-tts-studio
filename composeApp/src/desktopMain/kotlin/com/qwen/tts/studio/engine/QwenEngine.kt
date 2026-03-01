@@ -25,6 +25,7 @@ class QwenEngine {
 
     data class NativeParams(
         val languageId: Int = 2050, // Default to English
+        val instruction: String? = null,
         val maxAudioTokens: Int = 4096,
         val temperature: Float = 0.9f,
         val topP: Float = 1.0f,
@@ -222,16 +223,17 @@ class QwenEngine {
         text: String,
         referenceWav: String? = null,
         speakerEmbeddingPath: String? = null,
-        languageId: Int = 2050
+        languageId: Int = 2050,
+        instruction: String? = null
     ): FloatArray? {
         if (useCliFallback) {
-            return generateViaCli(text, referenceWav, speakerEmbeddingPath, languageId)
+            return generateViaCli(text, referenceWav, speakerEmbeddingPath, languageId, instruction)
         }
 
         if (nativePtr == 0L) return null
 
         return try {
-            val params = NativeParams(languageId = languageId)
+            val params = NativeParams(languageId = languageId, instruction = instruction)
             val result = nativeSynthesize(nativePtr, text, referenceWav, speakerEmbeddingPath, params)
             if (result != null && result.success) {
                 result.audio
@@ -271,7 +273,7 @@ class QwenEngine {
         }
     }
 
-    private fun generateViaCli(text: String, referenceWav: String?, speakerEmbeddingPath: String?, languageId: Int): FloatArray? {
+    private fun generateViaCli(text: String, referenceWav: String?, speakerEmbeddingPath: String?, languageId: Int, instruction: String?): FloatArray? {
         val modelDir = loadedModelDir ?: return null
         val root = try { resolveNativeRoot() } catch (e: Exception) { File(".") }
         val cliExe = resolveCliExe(root) ?: return null
@@ -291,6 +293,9 @@ class QwenEngine {
             command += listOf("--speaker-embedding", speakerEmbeddingPath)
         } else if (!referenceWav.isNullOrBlank()) {
             command += listOf("-r", referenceWav)
+        }
+        if (!instruction.isNullOrBlank()) {
+            command += listOf("--instruction", instruction)
         }
 
         val process = ProcessBuilder(command)

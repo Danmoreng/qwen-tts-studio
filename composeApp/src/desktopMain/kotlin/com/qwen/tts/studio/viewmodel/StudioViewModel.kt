@@ -20,6 +20,7 @@ data class StudioUiState(
     val text: String = "Another test bites the dust.",
     val selectedVoice: String = "Default Voice (Model)",
     val selectedLanguage: String = "English",
+    val selectedInstruction: String = "",
     val isGenerating: Boolean = false,
     val isPlaying: Boolean = false,
     val progress: Float = 0f,
@@ -53,6 +54,10 @@ class StudioViewModel : ViewModel() {
         _uiState.value = _uiState.value.copy(selectedLanguage = newLanguage)
     }
 
+    fun onInstructionChange(newInstruction: String) {
+        _uiState.value = _uiState.value.copy(selectedInstruction = newInstruction)
+    }
+
     fun generateAudio(modelDir: String, speakerEmbeddingPath: String?, referenceWav: String?) {
         val currentState = _uiState.value
         if (currentState.text.isBlank() || currentState.isGenerating) return
@@ -80,7 +85,8 @@ class StudioViewModel : ViewModel() {
                             text = currentState.text,
                             referenceWav = referenceWav,
                             speakerEmbeddingPath = speakerEmbeddingPath,
-                            languageId = langId
+                            languageId = langId,
+                            instruction = currentState.selectedInstruction.takeIf { it.isNotBlank() }
                         )
                     }
                     if (audio != null) {
