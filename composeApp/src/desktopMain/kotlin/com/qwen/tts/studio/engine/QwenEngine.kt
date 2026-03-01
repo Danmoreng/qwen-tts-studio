@@ -67,25 +67,41 @@ class QwenEngine {
                         }
                     }
 
-                    // Required native dependencies. Order matters:
-                    // ggml.dll imports ggml-cpu.dll, so ggml-cpu must be loaded first.
-                    val requiredDeps = listOf(
-                        "ggml-base.dll",
-                        "ggml-cpu.dll",
-                        "ggml.dll"
-                    )
-                    for (depName in requiredDeps) {
+                    // Required base dependency
+                    val ggmlBase = File(root, "ggml-base.dll")
+                    if (!ggmlBase.exists()) {
+                        throw IllegalStateException("Missing required dependency: ${ggmlBase.absolutePath}")
+                    }
+                    System.load(ggmlBase.absolutePath)
+                    println("[QwenEngine] Loaded dependency from root: ggml-base.dll")
+
+                    // Optional backend dependencies (CPU / CUDA).
+                    // Load before ggml.dll because ggml can import backend DLLs.
+                    val backendCandidates = listOf("ggml-cpu.dll", "ggml-cuda.dll")
+                    var backendLoaded = false
+                    for (depName in backendCandidates) {
                         val depFile = File(root, depName)
-                        if (!depFile.exists()) {
-                            throw IllegalStateException("Missing required dependency: ${depFile.absolutePath}")
-                        }
+                        if (!depFile.exists()) continue
                         try {
                             System.load(depFile.absolutePath)
                             println("[QwenEngine] Loaded dependency from root: $depName")
+                            backendLoaded = true
                         } catch (e: Throwable) {
                             throw IllegalStateException("Failed loading dependency: ${depFile.absolutePath}", e)
                         }
                     }
+                    if (!backendLoaded) {
+                        throw IllegalStateException(
+                            "Missing backend dependency. Expected at least one of: ggml-cpu.dll, ggml-cuda.dll"
+                        )
+                    }
+
+                    val ggml = File(root, "ggml.dll")
+                    if (!ggml.exists()) {
+                        throw IllegalStateException("Missing required dependency: ${ggml.absolutePath}")
+                    }
+                    System.load(ggml.absolutePath)
+                    println("[QwenEngine] Loaded dependency from root: ggml.dll")
 
                     val dll = File(root, "qwen3_tts.dll")
                     System.load(dll.absolutePath)

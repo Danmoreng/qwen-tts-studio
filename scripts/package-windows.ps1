@@ -1,7 +1,9 @@
 param(
     [string]$Configuration = "Release",
     [switch]$BuildMsi,
-    [int]$GradleRetries = 3
+    [int]$GradleRetries = 3,
+    [switch]$Cuda,
+    [switch]$UseNinja
 )
 
 $ErrorActionPreference = "Stop"
@@ -96,7 +98,7 @@ $env:Path = (Join-Path $ResolvedJavaHome "bin") + ";" + $env:Path
 Write-Host "Using JAVA_HOME: $ResolvedJavaHome" -ForegroundColor DarkCyan
 
 Write-Host "Step 1/3: Build native DLLs..." -ForegroundColor Cyan
-& (Join-Path $PSScriptRoot "build-native.ps1") -Configuration $Configuration -CopyToRoot
+& (Join-Path $PSScriptRoot "build-native.ps1") -Configuration $Configuration -CopyToRoot -Cuda:$Cuda -UseNinja:$UseNinja
 
 Write-Host "Step 2/3: Build Compose distributable..." -ForegroundColor Cyan
 Invoke-Gradle @(":composeApp:createDistributable") -Retries $GradleRetries
@@ -117,6 +119,9 @@ if (-not (Test-Path $AppRoot)) {
 }
 
 $NativeDlls = @("qwen3_tts.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll")
+if (Test-Path (Join-Path $RepoRoot "ggml-cuda.dll")) {
+    $NativeDlls += "ggml-cuda.dll"
+}
 Write-Host "Step 3/3: Copy native DLLs into packaged app..." -ForegroundColor Cyan
 foreach ($dll in $NativeDlls) {
     $src = Join-Path $RepoRoot $dll
