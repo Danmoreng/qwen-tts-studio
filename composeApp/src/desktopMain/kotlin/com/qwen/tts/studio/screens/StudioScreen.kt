@@ -111,6 +111,38 @@ fun StudioScreen(
                         }
                     }
                 }
+
+                // Language Selection
+                var langExpanded by remember { mutableStateOf(false) }
+                val languages = listOf("English", "German", "French", "Spanish", "Chinese", "Japanese", "Korean", "Russian", "Italian", "Portuguese")
+                Box {
+                    OutlinedCard(
+                        onClick = { langExpanded = true },
+                        modifier = Modifier.width(180.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(Icons.Default.Language, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Text(uiState.selectedLanguage, fontWeight = FontWeight.Medium)
+                            Spacer(Modifier.weight(1f))
+                            Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                        }
+                    }
+                    DropdownMenu(expanded = langExpanded, onDismissRequest = { langExpanded = false }) {
+                        languages.forEach { lang ->
+                            DropdownMenuItem(
+                                text = { Text(lang) },
+                                onClick = {
+                                    viewModel.onLanguageChange(lang)
+                                    langExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
             }
         }
 
