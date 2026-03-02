@@ -75,8 +75,9 @@ class QwenEngine {
             candidates += userDir
             userDir.parentFile?.let { candidates += it }
             
-            // Add build directory for development
+            // Add build directory for development (root or subproject)
             candidates += File(userDir, "external/qwen3-tts-cpp/build")
+            userDir.parentFile?.let { candidates += File(it, "external/qwen3-tts-cpp/build") }
 
             val jnaLibPath = System.getProperty("jna.library.path")
             if (!jnaLibPath.isNullOrBlank()) {
