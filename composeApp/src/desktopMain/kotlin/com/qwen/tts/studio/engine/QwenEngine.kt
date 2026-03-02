@@ -123,9 +123,15 @@ class QwenEngine {
                     }
 
                     // Required base dependency
-                    val ggmlBase = File(root, "${prefix}ggml-base$ext")
+                    val ggmlBaseName = "${prefix}ggml-base$ext"
+                    var ggmlBase = File(root, ggmlBaseName)
                     if (!ggmlBase.exists()) {
-                        throw IllegalStateException("Missing required dependency: ${ggmlBase.absolutePath}")
+                        // Check ggml/src subdirectory for development builds
+                        ggmlBase = File(root, "ggml/src/$ggmlBaseName")
+                    }
+                    
+                    if (!ggmlBase.exists()) {
+                        throw IllegalStateException("Missing required dependency: $ggmlBaseName. Checked ${root.absolutePath} and its ggml/src subdirectory.")
                     }
                     System.load(ggmlBase.absolutePath)
                     println("[QwenEngine] Loaded dependency from root: ${ggmlBase.name}")
@@ -135,7 +141,11 @@ class QwenEngine {
                     val backendCandidates = listOf("${prefix}ggml-cpu$ext", "${prefix}ggml-cuda$ext")
                     var backendLoaded = false
                     for (depName in backendCandidates) {
-                        val depFile = File(root, depName)
+                        var depFile = File(root, depName)
+                        if (!depFile.exists()) {
+                            depFile = File(root, "ggml/src/$depName")
+                        }
+                        
                         if (!depFile.exists()) continue
                         try {
                             System.load(depFile.absolutePath)
@@ -151,9 +161,14 @@ class QwenEngine {
                         )
                     }
 
-                    val ggml = File(root, "${prefix}ggml$ext")
+                    val ggmlName = "${prefix}ggml$ext"
+                    var ggml = File(root, ggmlName)
                     if (!ggml.exists()) {
-                        throw IllegalStateException("Missing required dependency: ${ggml.absolutePath}")
+                        ggml = File(root, "ggml/src/$ggmlName")
+                    }
+                    
+                    if (!ggml.exists()) {
+                        throw IllegalStateException("Missing required dependency: $ggmlName. Checked ${root.absolutePath} and its ggml/src subdirectory.")
                     }
                     System.load(ggml.absolutePath)
                     println("[QwenEngine] Loaded dependency from root: ${ggml.name}")
