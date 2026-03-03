@@ -74,6 +74,10 @@ class QwenEngine {
             val candidates = mutableListOf<File>()
             candidates += userDir
             userDir.parentFile?.let { candidates += it }
+            
+            // Add build directory for development (root or subproject)
+            candidates += File(userDir, "external/qwen3-tts-cpp/build")
+            userDir.parentFile?.let { candidates += File(it, "external/qwen3-tts-cpp/build") }
 
             val jnaLibPath = System.getProperty("jna.library.path")
             if (!jnaLibPath.isNullOrBlank()) {
@@ -83,9 +87,12 @@ class QwenEngine {
                     .mapTo(candidates) { File(it) }
             }
 
-            return candidates.firstOrNull { File(it, "qwen3_tts.dll").exists() }
+            val isWindows = System.getProperty("os.name").lowercase().contains("win")
+            val libName = if (isWindows) "qwen3_tts.dll" else "libqwen3_tts_jni.so"
+
+            return candidates.firstOrNull { File(it, libName).exists() }
                 ?: throw IllegalArgumentException(
-                    "Missing native library qwen3_tts.dll. Checked: ${
+                    "Missing native library $libName. Checked: ${
                         candidates.joinToString(", ") { it.absolutePath }
                     }"
                 )
@@ -98,31 +105,47 @@ class QwenEngine {
                     val root = resolveNativeRoot()
                     println("[QwenEngine] Root found at: ${root.absolutePath}")
 
-                    // Best-effort preload for common runtime/system libraries.
-                    val systemDeps = listOf("vcomp140", "Psapi")
-                    for (depName in systemDeps) {
-                        try {
-                            System.loadLibrary(depName)
-                            println("[QwenEngine] Loaded system library: $depName.dll")
-                        } catch (_: Throwable) {
-                            // Optional preload: these may already be present/loaded.
+                    val isWindows = System.getProperty("os.name").lowercase().contains("win")
+                    val ext = if (isWindows) ".dll" else ".so"
+                    val prefix = if (isWindows) "" else "lib"
+
+                    if (isWindows) {
+                        // Best-effort preload for common runtime/system libraries.
+                        val systemDeps = listOf("vcomp140", "Psapi")
+                        for (depName in systemDeps) {
+                            try {
+                                System.loadLibrary(depName)
+                                println("[QwenEngine] Loaded system library: $depName.dll")
+                            } catch (_: Throwable) {
+                                // Optional preload: these may already be present/loaded.
+                            }
                         }
                     }
 
                     // Required base dependency
-                    val ggmlBase = File(root, "ggml-base.dll")
+                    val ggmlBaseName = "${prefix}ggml-base$ext"
+                    var ggmlBase = File(root, ggmlBaseName)
                     if (!ggmlBase.exists()) {
-                        throw IllegalStateException("Missing required dependency: ${ggmlBase.absolutePath}")
+                        // Check ggml/src subdirectory for development builds
+                        ggmlBase = File(root, "ggml/src/$ggmlBaseName")
+                    }
+                    
+                    if (!ggmlBase.exists()) {
+                        throw IllegalStateException("Missing required dependency: $ggmlBaseName. Checked ${root.absolutePath} and its ggml/src subdirectory.")
                     }
                     System.load(ggmlBase.absolutePath)
-                    println("[QwenEngine] Loaded dependency from root: ggml-base.dll")
+                    println("[QwenEngine] Loaded dependency from root: ${ggmlBase.name}")
 
                     // Optional backend dependencies (CPU / CUDA).
-                    // Load before ggml.dll because ggml can import backend DLLs.
-                    val backendCandidates = listOf("ggml-cpu.dll", "ggml-cuda.dll")
+                    // Load before ggml because ggml can import backend DLLs.
+                    val backendCandidates = listOf("${prefix}ggml-cpu$ext", "${prefix}ggml-cuda$ext")
                     var backendLoaded = false
                     for (depName in backendCandidates) {
-                        val depFile = File(root, depName)
+                        var depFile = File(root, depName)
+                        if (!depFile.exists()) {
+                            depFile = File(root, "ggml/src/$depName")
+                        }
+                        
                         if (!depFile.exists()) continue
                         try {
                             System.load(depFile.absolutePath)
@@ -134,18 +157,24 @@ class QwenEngine {
                     }
                     if (!backendLoaded) {
                         throw IllegalStateException(
-                            "Missing backend dependency. Expected at least one of: ggml-cpu.dll, ggml-cuda.dll"
+                            "Missing backend dependency. Expected at least one of: ${prefix}ggml-cpu$ext, ${prefix}ggml-cuda$ext"
                         )
                     }
 
-                    val ggml = File(root, "ggml.dll")
+                    val ggmlName = "${prefix}ggml$ext"
+                    var ggml = File(root, ggmlName)
                     if (!ggml.exists()) {
-                        throw IllegalStateException("Missing required dependency: ${ggml.absolutePath}")
+                        ggml = File(root, "ggml/src/$ggmlName")
+                    }
+                    
+                    if (!ggml.exists()) {
+                        throw IllegalStateException("Missing required dependency: $ggmlName. Checked ${root.absolutePath} and its ggml/src subdirectory.")
                     }
                     System.load(ggml.absolutePath)
-                    println("[QwenEngine] Loaded dependency from root: ggml.dll")
+                    println("[QwenEngine] Loaded dependency from root: ${ggml.name}")
 
-                    val dll = File(root, "qwen3_tts.dll")
+                    val mainLibName = if (isWindows) "qwen3_tts.dll" else "libqwen3_tts_jni.so"
+                    val dll = File(root, mainLibName)
                     System.load(dll.absolutePath)
                     isNativeLoaded = true
                     println("[QwenEngine] JNI loaded successfully: ${dll.absolutePath}")
@@ -157,11 +186,15 @@ class QwenEngine {
         }
 
         private fun resolveCliExe(root: File): File? {
+            val isWindows = System.getProperty("os.name").lowercase().contains("win")
+            val exeExt = if (isWindows) ".exe" else ""
+            
             val candidates = listOf(
-                File(root, "qwen3-tts-cli.exe"),
-                File(root, "external/build/qwen3-tts-cpp/Release/qwen3-tts-cli.exe"),
-                File(root, "external/build_fix/qwen3-tts-cpp/Release/qwen3-tts-cli.exe"),
-                File(root.parentFile ?: root, "external/build/qwen3-tts-cpp/Release/qwen3-tts-cli.exe")
+                File(root, "qwen3-tts-cli$exeExt"),
+                File(root, "external/qwen3-tts-cpp/build/qwen3-tts-cli$exeExt"),
+                File(root, "external/build/qwen3-tts-cpp/Release/qwen3-tts-cli$exeExt"),
+                File(root, "external/build_fix/qwen3-tts-cpp/Release/qwen3-tts-cli$exeExt"),
+                File(root.parentFile ?: root, "external/build/qwen3-tts-cpp/Release/qwen3-tts-cli$exeExt")
             )
             return candidates.firstOrNull { it.exists() && it.isFile }
         }
