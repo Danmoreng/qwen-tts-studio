@@ -18,10 +18,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.qwen.tts.studio.util.FilePicker
 import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import com.qwen.tts.studio.viewmodel.StudioViewModel
 import com.qwen.tts.studio.viewmodel.VoicesViewModel
+import io.github.vinceglb.filekit.compose.rememberFileSaverLauncher
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -33,6 +33,10 @@ fun StudioScreen(
     val uiState by viewModel.uiState.collectAsState()
     val modelDir by settingsViewModel.modelDir.collectAsState()
     val voices by voicesViewModel.voices.collectAsState()
+
+    val saverLauncher = rememberFileSaverLauncher { file ->
+        file?.path?.let { viewModel.saveAudioToFile(java.io.File(it)) }
+    }
 
     LaunchedEffect(uiState.selectedVoice, voices) {
         if (voices.none { it.name == uiState.selectedVoice } && voices.isNotEmpty()) {
@@ -269,10 +273,9 @@ fun StudioScreen(
                     if (uiState.hasAudio) {
                         OutlinedButton(
                             onClick = {
-                                FilePicker.saveFile(
-                                    title = "Save Generated Audio",
-                                    defaultName = "output.wav",
-                                    onFileSelected = { file -> viewModel.saveAudioToFile(file) }
+                                saverLauncher.launch(
+                                    baseName = "output",
+                                    extension = "wav"
                                 )
                             },
                             enabled = !uiState.isSaving

@@ -26,10 +26,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.qwen.tts.studio.util.FilePicker
 import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import com.qwen.tts.studio.viewmodel.VoicePreset
 import com.qwen.tts.studio.viewmodel.VoicesViewModel
+import io.github.vinceglb.filekit.compose.rememberFilePickerLauncher
+import io.github.vinceglb.filekit.core.PickerType
 import java.io.File
 
 @Composable
@@ -40,6 +41,13 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
     val modelDir by settingsViewModel.modelDir.collectAsState()
     var presetName by remember { mutableStateOf("") }
     var referencePath by remember { mutableStateOf("") }
+    
+    val launcher = rememberFilePickerLauncher(
+        type = PickerType.File(extensions = listOf("wav")),
+        title = "Select Reference Audio"
+    ) { file ->
+        file?.path?.let { referencePath = it }
+    }
 
     Column(
         modifier = Modifier
@@ -74,12 +82,7 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
                         singleLine = true
                     )
                     Button(
-                        onClick = {
-                            FilePicker.pickFile(
-                                title = "Select Reference Audio",
-                                allowedExtensions = listOf(".wav")
-                            ) { referencePath = it }
-                        }
+                        onClick = { launcher.launch() }
                     ) {
                         Icon(Icons.Default.FolderOpen, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
