@@ -1,115 +1,53 @@
 # Qwen-TTS Studio
 
-Qwen-TTS Studio is a native, minimalist desktop application for Windows and Linux that provides local, high-quality Text-to-Speech (TTS) synthesis. It leverages the powerful **Qwen3-TTS** (based on the CosyVoice architecture) model with an efficient C++ backend to ensure privacy-first, low-latency performance.
+⚠️ **ALPHA STATUS & DISCLAIMER** ⚠️
 
-## 🚀 Features
+This project is a **super unfinished, quick weekend project**. It is currently in **alpha** stage and should be considered experimental software. 
 
-- **Local Synthesis:** All processing happens on your machine. No data leaves your computer.
-- **Ultra-Low Latency:** Optimized C++ inference engine for near-instant speech generation.
-- **Modern UI:** Built with Compose Multiplatform, featuring a sleek Material 3 design with full Dark Mode support.
-- **Voice Cloning:** Clone voices with just a 3-10 second audio sample (Zero-Shot Cloning).
-- **Emotion Control:** Direct control over speech emotions (e.g., Happy, Whisper, Dynamic) via prompt-based instructions.
-- **Hardware Monitoring:** Real-time tracking of RAM and CPU/GPU usage within the app.
+**Please be aware:**
+- **Not User-Friendly:** This is currently hard for other people to get running.
+- **Hardcoded Paths:** There are several hardcoded paths in the source code that will need to be manually adjusted for your environment.
+- **Manual Model Setup:** You cannot just run the app and have it work. You must manually use the Python conversion scripts in the `external/qwen3-tts-cpp` submodule to convert the HuggingFace models (0.6B) into the required GGUF format.
+- **Broken 1.7B Support:** The 1.7B model version **does not work yet** and is currently unsupported. Only the 0.6B model is partially functional.
+- **Missing Features:** Many UI elements (like style instructions and hardware acceleration selection) are currently placeholders or have been hidden because they are not yet backed by a stable implementation.
+
+---
+
+Qwen-TTS Studio is a native, minimalist desktop application for Windows and Linux that provides local Text-to-Speech (TTS) synthesis. It leverages the **Qwen3-TTS** (based on the CosyVoice architecture) model with a C++ backend.
+
+## 🚀 Current State
+
+- **Local Synthesis:** Functional for the 0.6B model if correctly configured.
+- **Modern UI:** Built with Compose Multiplatform (Material 3).
+- **Voice Cloning:** Basic support for Zero-Shot Cloning using the 0.6B model.
+- **Backend:** C++ Inference Engine using [qwen3-tts.cpp](https://github.com/Danmoreng/qwen3-tts.cpp/tree/feat/cuda-support).
 
 ## 🛠️ Technology Stack
 
 - **Frontend:** [Compose Multiplatform](https://www.jetbrains.com/lp/compose-multiplatform/) (Kotlin)
-- **Backend:** C++ Inference Engine using [qwen3-tts.cpp](https://github.com/Danmoreng/qwen3-tts.cpp/tree/feat/cuda-support) (ggml-based with CUDA support).
-- **Interoperability:** JNA / Project Panama (FFI) to interface with the native shared library.
+- **Backend:** C++ Inference Engine using [qwen3-tts.cpp](https://github.com/Danmoreng/qwen3-tts.cpp/tree/feat/cuda-support).
+- **Interoperability:** JNA to interface with the native shared library.
 
-## 📋 Requirements
+## 🏗️ Getting Started (For Developers Only)
 
-- **JDK 17 or newer** (full JDK with JNI headers/libs for native build)
-- **Windows** (10/11) or **Linux** (Ubuntu/Debian preferred)
-- **Hardware:** Modern CPU/GPU for efficient inference.
-- **Build tools for native backend:** CMake + MSVC Build Tools (Windows)
-
-## 🏗️ Getting Started
-
-Currently, the project is in the initial development phase. Refer to the [Development Plan](docs/DEVELOPMENT_PLAN.md) for the detailed roadmap.
+Refer to the [Development Plan](docs/DEVELOPMENT_PLAN.md) for the roadmap, but expect to spend time debugging the build environment and model paths.
 
 ### Running from source
 
-1. Clone the repository:
+1. Clone the repository and initialize submodules:
    ```bash
-   git clone https://github.com/your-username/qwen-tts-studio.git
+   git clone --recursive https://github.com/Danmoreng/qwen-tts-studio.git
    ```
-2. Open in **IntelliJ IDEA**.
-3. Run the Gradle task:
-   ```bash
-   ./gradlew run
+2. **Convert Models:** Follow instructions in `external/qwen3-tts-cpp` to use the Python scripts for generating `.gguf` files for the 0.6B model.
+3. **Fix Paths:** Search the codebase for hardcoded paths (e.g., in `SettingsViewModel.kt`) and update them to point to your model directory.
+4. **Build Native:**
+   ```powershell
+   .\scripts\build-native.ps1
    ```
-
-### One-command Windows build (native + app)
-
-```powershell
-.\scripts\build-native.ps1
-.\gradlew.bat :composeApp:run
-```
-
-CUDA build:
-
-```powershell
-.\scripts\build-native.ps1 -Cuda
-.\gradlew.bat :composeApp:run
-```
-
-Force Ninja generator:
-
-```powershell
-.\scripts\build-native.ps1 -Cuda -UseNinja
-```
-
-Android Studio / Gradle task equivalents:
-
-```powershell
-.\gradlew.bat nativeBuild
-.\gradlew.bat nativeBuildCuda
-```
-
-### Windows packaging
-
-Build portable app folder:
-
-```powershell
-.\scripts\package-windows.ps1
-```
-
-Build portable app folder with CUDA backend:
-
-```powershell
-.\scripts\package-windows.ps1 -Cuda
-```
-
-Use Ninja for native build during packaging:
-
-```powershell
-.\scripts\package-windows.ps1 -Cuda -UseNinja
-```
-
-Gradle task equivalents:
-
-```powershell
-.\gradlew.bat packageWindows
-.\gradlew.bat packageWindowsCuda
-```
-
-Build portable app + MSI installer:
-
-```powershell
-.\scripts\package-windows.ps1 -BuildMsi
-```
-
-Outputs:
-- Portable app: `composeApp\build\compose\binaries\main\app\qwen-tts-studio`
-- MSI: `composeApp\build\compose\binaries\main\msi`
-
-Notes:
-- `package-windows.ps1` first rebuilds the native `qwen3_tts.dll` + `ggml*.dll`.
-- It then copies those DLLs into the packaged app directory so the launcher can find them.
-- It auto-detects Java from `JAVA_HOME`, `java` on `PATH`, Android Studio JBR, or `%USERPROFILE%\.gradle\jdks`.
-- It retries Gradle packaging with extended network timeouts (helpful for WiX download timeouts).
-- For CUDA builds, `build-native.ps1 -Cuda` uses `external/build-cuda` and deploys `ggml-cuda.dll` (+ available CUDA runtime DLLs).
+5. **Run App:**
+   ```powershell
+   .\gradlew.bat :composeApp:run
+   ```
 
 ## 📜 License
 
