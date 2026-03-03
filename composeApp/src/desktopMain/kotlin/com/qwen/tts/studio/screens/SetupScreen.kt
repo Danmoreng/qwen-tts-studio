@@ -17,7 +17,6 @@ import com.qwen.tts.studio.viewmodel.SettingsViewModel
 @Composable
 fun SetupScreen(viewModel: SettingsViewModel) {
     val modelDir by viewModel.modelDir.collectAsState()
-    val selectedAcceleration by viewModel.acceleration.collectAsState()
 
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -62,38 +61,6 @@ fun SetupScreen(viewModel: SettingsViewModel) {
                 }
 
                 HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
-
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Hardware Acceleration", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    var expanded by remember { mutableStateOf(false) }
-                    ExposedDropdownMenuBox(
-                        expanded = expanded,
-                        onExpandedChange = { expanded = !expanded }
-                    ) {
-                        OutlinedTextField(
-                            value = selectedAcceleration,
-                            onValueChange = {},
-                            readOnly = true,
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                            modifier = Modifier.fillMaxWidth().menuAnchor(),
-                            shape = MaterialTheme.shapes.medium
-                        )
-                        ExposedDropdownMenu(
-                            expanded = expanded,
-                            onDismissRequest = { expanded = false }
-                        ) {
-                            listOf("CPU (AVX2)", "CUDA (NVIDIA GPU)", "Vulkan (AMD/Intel)").forEach { selectionOption ->
-                                DropdownMenuItem(
-                                    text = { Text(selectionOption) },
-                                    onClick = {
-                                        viewModel.setAcceleration(selectionOption)
-                                        expanded = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
                 
                 Spacer(Modifier.height(16.dp))
                 
