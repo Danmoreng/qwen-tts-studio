@@ -10,13 +10,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.qwen.tts.studio.util.FilePicker
 import com.qwen.tts.studio.viewmodel.SettingsViewModel
+import io.github.vinceglb.filekit.compose.rememberDirectoryPickerLauncher
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SetupScreen(viewModel: SettingsViewModel) {
     val modelDir by viewModel.modelDir.collectAsState()
+    
+    val launcher = rememberDirectoryPickerLauncher(title = "Select Qwen3 Model Directory") { directory ->
+        directory?.path?.let { viewModel.setModelDir(it) }
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -47,9 +51,7 @@ fun SetupScreen(viewModel: SettingsViewModel) {
                             shape = MaterialTheme.shapes.medium
                         )
                         Button(
-                            onClick = { 
-                                FilePicker.pickDirectory("Select Qwen3 Model Directory") { viewModel.setModelDir(it) }
-                            },
+                            onClick = { launcher.launch() },
                             shape = MaterialTheme.shapes.medium,
                             modifier = Modifier.height(56.dp)
                         ) {
