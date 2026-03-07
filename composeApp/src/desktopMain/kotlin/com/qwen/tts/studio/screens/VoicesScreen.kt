@@ -1,6 +1,13 @@
 package com.qwen.tts.studio.screens
 
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -17,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -26,7 +34,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.qwen.tts.studio.viewmodel.ModelVariant
 import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import com.qwen.tts.studio.viewmodel.VoicePreset
 import com.qwen.tts.studio.viewmodel.VoicesViewModel
@@ -39,17 +46,21 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
     val voices by viewModel.voices.collectAsState()
     val isCreating by viewModel.isCreating.collectAsState()
     val error by viewModel.error.collectAsState()
+    val supportsCloning by viewModel.supportsCloning.collectAsState()
     val modelDir by settingsViewModel.modelDir.collectAsState()
-    val modelVariant by settingsViewModel.modelVariant.collectAsState()
-    val isModel17 = modelVariant == ModelVariant.MODEL_1_7B
+    val modelName by settingsViewModel.modelName.collectAsState()
     var presetName by remember { mutableStateOf("") }
     var referencePath by remember { mutableStateOf("") }
-    
+
     val launcher = rememberFilePickerLauncher(
         type = PickerType.File(extensions = listOf("wav")),
         title = "Select Reference Audio"
     ) { file ->
         file?.path?.let { referencePath = it }
+    }
+
+    LaunchedEffect(modelDir, modelName) {
+        viewModel.refreshModelCapabilities(modelDir, modelName)
     }
 
     Column(
@@ -88,16 +99,16 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
                         onClick = { launcher.launch() }
                     ) {
                         Icon(Icons.Default.FolderOpen, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.size(8.dp))
                         Text("Browse")
                     }
                 }
                 if (error != null) {
                     Text(error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
-                if (isModel17) {
+                if (!supportsCloning) {
                     Text(
-                        "Custom voice presets are only available in 0.6B mode. Switch model variant in Setup/Studio.",
+                        "Current model does not support custom voice cloning.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall
                     )
@@ -106,19 +117,19 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
                     onClick = {
                         val fallbackName = File(referencePath).nameWithoutExtension
                         val nameToUse = presetName.ifBlank { fallbackName }
-                        viewModel.createVoicePreset(nameToUse, referencePath, modelDir, modelVariant.modelFile)
+                        viewModel.createVoicePreset(nameToUse, referencePath, modelDir, modelName)
                         presetName = ""
                         referencePath = ""
                     },
-                    enabled = referencePath.isNotBlank() && !isCreating && !isModel17
+                    enabled = referencePath.isNotBlank() && !isCreating && supportsCloning
                 ) {
                     if (isCreating) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.size(8.dp))
                         Text("Extracting Embedding...")
                     } else {
                         Icon(Icons.Default.Add, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.size(8.dp))
                         Text("Create Preset")
                     }
                 }

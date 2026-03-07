@@ -17,7 +17,8 @@ data class VoicePreset(
     val id: String,
     val name: String,
     val referenceWav: String?,
-    val speakerEmbeddingPath: String?
+    val speakerEmbeddingPath: String?,
+    val embeddingDim: Int? = null
 ) {
     val isSystem: Boolean = referenceWav == null && speakerEmbeddingPath == null
 }
@@ -41,6 +42,10 @@ class VoicesViewModel : ViewModel() {
     val isCreating: StateFlow<Boolean> = _isCreating.asStateFlow()
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
+    private val _supportsCloning = MutableStateFlow(true)
+    val supportsCloning: StateFlow<Boolean> = _supportsCloning.asStateFlow()
+    private val _currentEmbeddingDim = MutableStateFlow(0)
+    val currentEmbeddingDim: StateFlow<Int> = _currentEmbeddingDim.asStateFlow()
 
     private val qwenEngine = QwenEngine()
     private val nativeDispatcher = Executors.newSingleThreadExecutor { runnable ->
@@ -48,6 +53,18 @@ class VoicesViewModel : ViewModel() {
             isDaemon = true
         }
     }.asCoroutineDispatcher()
+
+    fun refreshModelCapabilities(modelDir: String, modelName: String?) {
+        if (modelDir.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val resolvedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
+            val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, resolvedModelName) }
+            if (!loaded) return@launch
+            val caps = withContext(nativeDispatcher) { qwenEngine.getModelCapabilities() }
+            _supportsCloning.value = caps?.supportsCloning ?: true
+            _currentEmbeddingDim.value = caps?.speakerEmbeddingDim ?: 0
+        }
+    }
 
     fun createVoicePreset(name: String, referenceWav: String, modelDir: String, modelName: String?) {
         val wavFile = File(referenceWav)
@@ -73,20 +90,31 @@ class VoicesViewModel : ViewModel() {
         val voiceId = "voice-${System.currentTimeMillis()}"
         viewModelScope.launch {
             try {
+                val resolvedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
+                val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, resolvedModelName) }
+                if (!loaded) {
+                    _error.value = "Failed to load Qwen3 models for speaker embedding extraction."
+                    return@launch
+                }
+
+                val caps = withContext(nativeDispatcher) { qwenEngine.getModelCapabilities() }
+                val supportsCloning = caps?.supportsCloning ?: true
+                val embeddingDim = caps?.speakerEmbeddingDim ?: 0
+                _supportsCloning.value = supportsCloning
+                _currentEmbeddingDim.value = embeddingDim
+                if (!supportsCloning) {
+                    _error.value = "Current model does not support custom voice cloning."
+                    return@launch
+                }
+
                 val embeddingFile = withContext(Dispatchers.IO) {
                     val embeddingsDir = File(
                         File(System.getProperty("user.home"), ".qwen-tts-studio"),
                         "embeddings"
                     )
                     embeddingsDir.mkdirs()
-                    File(embeddingsDir, "$voiceId.json")
-                }
-
-                val resolvedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
-                val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, resolvedModelName) }
-                if (!loaded) {
-                    _error.value = "Failed to load Qwen3 models for speaker embedding extraction."
-                    return@launch
+                    val dimSuffix = if (embeddingDim > 0) "-d$embeddingDim" else ""
+                    File(embeddingsDir, "$voiceId$dimSuffix.json")
                 }
 
                 val extracted = withContext(nativeDispatcher) {
@@ -101,7 +129,8 @@ class VoicesViewModel : ViewModel() {
                     id = voiceId,
                     name = uniqueName,
                     referenceWav = wavFile.absolutePath,
-                    speakerEmbeddingPath = embeddingFile.absolutePath
+                    speakerEmbeddingPath = embeddingFile.absolutePath,
+                    embeddingDim = embeddingDim.takeIf { it > 0 }
                 )
                 _voices.value = _voices.value + preset
                 saveVoices()
@@ -124,8 +153,15 @@ class VoicesViewModel : ViewModel() {
         return _voices.value.firstOrNull { it.name == name }?.referenceWav
     }
 
-    fun speakerEmbeddingForVoice(name: String): String? {
-        return _voices.value.firstOrNull { it.name == name }?.speakerEmbeddingPath
+    fun speakerEmbeddingForVoice(name: String, expectedDim: Int): String? {
+        val preset = _voices.value.firstOrNull { it.name == name } ?: return null
+        val embedding = preset.speakerEmbeddingPath ?: return null
+        if (expectedDim <= 0) return embedding
+        val dim = preset.embeddingDim
+        if (dim == null) {
+            return null
+        }
+        return if (dim == expectedDim) embedding else null
     }
 
     private fun makeUniqueName(baseName: String): String {
@@ -156,7 +192,8 @@ class VoicesViewModel : ViewModel() {
                     if (parts.size >= 4) {
                         val embedding = parts[2].ifBlank { null }
                         val wav = parts[3].ifBlank { null }
-                        VoicePreset(id = id, name = name, referenceWav = wav, speakerEmbeddingPath = embedding)
+                        val dim = parts.getOrNull(4)?.toIntOrNull()
+                        VoicePreset(id = id, name = name, referenceWav = wav, speakerEmbeddingPath = embedding, embeddingDim = dim)
                     } else {
                         val wav = parts.getOrNull(2).orEmpty()
                         if (wav.isBlank()) return@mapNotNull null
@@ -173,7 +210,9 @@ class VoicesViewModel : ViewModel() {
         storageFile.parentFile?.mkdirs()
         val lines = _voices.value
             .filterNot { it.isSystem }
-            .map { "${it.id}\t${it.name}\t${it.speakerEmbeddingPath.orEmpty()}\t${it.referenceWav.orEmpty()}" }
+            .map {
+                "${it.id}\t${it.name}\t${it.speakerEmbeddingPath.orEmpty()}\t${it.referenceWav.orEmpty()}\t${it.embeddingDim?.toString().orEmpty()}"
+            }
         storageFile.writeText(lines.joinToString(System.lineSeparator()))
     }
 
