@@ -19,6 +19,8 @@ import javax.sound.sampled.*
 data class StudioUiState(
     val text: String = "Another test bites the dust.",
     val selectedVoice: String = "Default Voice (Model)",
+    val availableSpeakers: List<String> = emptyList(),
+    val selectedSpeaker: String = "",
     val selectedLanguage: String = "English",
     val selectedInstruction: String = "",
     val isGenerating: Boolean = false,
@@ -52,6 +54,10 @@ class StudioViewModel : ViewModel() {
         _uiState.update { it.copy(selectedVoice = newVoice) }
     }
 
+    fun onSpeakerChange(newSpeaker: String) {
+        _uiState.update { it.copy(selectedSpeaker = newSpeaker) }
+    }
+
     fun onLanguageChange(newLanguage: String) {
         _uiState.update { it.copy(selectedLanguage = newLanguage) }
     }
@@ -60,7 +66,16 @@ class StudioViewModel : ViewModel() {
         _uiState.update { it.copy(selectedInstruction = newInstruction) }
     }
 
-    fun generateAudio(modelDir: String, speakerEmbeddingPath: String?, referenceWav: String?) {
+    private fun supportsModel17Features(modelName: String?): Boolean {
+        return modelName?.contains("1.7b", ignoreCase = true) == true
+    }
+
+    fun generateAudio(
+        modelDir: String,
+        modelName: String?,
+        speakerEmbeddingPath: String?,
+        referenceWav: String?
+    ) {
         val currentState = _uiState.value
         if (currentState.text.isBlank() || currentState.isGenerating) return
         if (modelDir.isBlank()) {
@@ -73,16 +88,39 @@ class StudioViewModel : ViewModel() {
             
             try {
                 withContext(Dispatchers.IO) {
+                    val resolvedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
+                    val useModel17Features = supportsModel17Features(resolvedModelName)
                     val loaded = withContext(nativeDispatcher) {
-                        qwenEngine.load(modelDir)
+                        qwenEngine.load(modelDir, resolvedModelName)
                     }
                     if (!loaded) {
                         throw Exception("Failed to load Qwen3 models from directory.")
                     }
 
+                    if (useModel17Features) {
+                        val speakers = withContext(nativeDispatcher) {
+                            qwenEngine.getAvailableSpeakers()
+                        }
+                        _uiState.update { state ->
+                            val normalized = speakers.distinct()
+                            val nextSpeaker = state.selectedSpeaker.takeIf { it.isNotBlank() && normalized.contains(it) }.orEmpty()
+                            state.copy(availableSpeakers = normalized, selectedSpeaker = nextSpeaker)
+                        }
+                    } else {
+                        _uiState.update { state ->
+                            state.copy(availableSpeakers = emptyList(), selectedSpeaker = "", selectedInstruction = "")
+                        }
+                    }
+
                     // Re-read state in case it changed during load
                     val latestState = _uiState.value
                     val langId = QwenEngine.mapLanguageToId(latestState.selectedLanguage)
+                    val selectedSpeaker = latestState.selectedSpeaker.takeIf { it.isNotBlank() }
+                    val effectiveSpeaker = if (!useModel17Features || !speakerEmbeddingPath.isNullOrBlank() || !referenceWav.isNullOrBlank()) {
+                        null
+                    } else {
+                        selectedSpeaker
+                    }
 
                     val audio = withContext(nativeDispatcher) {
                         qwenEngine.generate(
@@ -90,7 +128,12 @@ class StudioViewModel : ViewModel() {
                             referenceWav = referenceWav,
                             speakerEmbeddingPath = speakerEmbeddingPath,
                             languageId = langId,
-                            instruction = latestState.selectedInstruction.takeIf { it.isNotBlank() }
+                            instruction = if (useModel17Features) {
+                                latestState.selectedInstruction.takeIf { it.isNotBlank() }
+                            } else {
+                                null
+                            },
+                            speaker = effectiveSpeaker
                         )
                     }
                     if (audio != null) {
@@ -105,6 +148,27 @@ class StudioViewModel : ViewModel() {
                 _uiState.update { it.copy(error = e.message ?: "Unknown error occurred") }
             } finally {
                 _uiState.update { it.copy(isGenerating = false) }
+            }
+        }
+    }
+
+    fun refreshAvailableSpeakers(modelDir: String, modelName: String?) {
+        if (modelDir.isBlank() || _uiState.value.isGenerating) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val resolvedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
+            val useModel17Features = supportsModel17Features(resolvedModelName)
+            if (!useModel17Features) {
+                _uiState.update { state ->
+                    state.copy(availableSpeakers = emptyList(), selectedSpeaker = "", selectedInstruction = "")
+                }
+                return@launch
+            }
+            val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, resolvedModelName) }
+            if (!loaded) return@launch
+            val speakers = withContext(nativeDispatcher) { qwenEngine.getAvailableSpeakers() }.distinct()
+            _uiState.update { state ->
+                val nextSpeaker = state.selectedSpeaker.takeIf { it.isNotBlank() && speakers.contains(it) }.orEmpty()
+                state.copy(availableSpeakers = speakers, selectedSpeaker = nextSpeaker)
             }
         }
     }
