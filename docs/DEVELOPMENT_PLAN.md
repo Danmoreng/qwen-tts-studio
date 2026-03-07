@@ -17,12 +17,19 @@ Desktop-first local TTS workflow with a modern UI and native C++ inference backe
   - model-name aware loading
   - named speaker API
   - instruction + speaker plumbing in JNI/C/KMP layers
-- Model variant switch in UI:
-  - `0.6B` mode
-  - `1.7B` mode
-- Mode-dependent behavior:
-  - `0.6B`: custom voices enabled (reference/embedding path flow)
-  - `1.7B`: instruction input + named speakers, custom voices disabled
+- Capability-driven UI behavior (no fixed size switch):
+  - app detects model capabilities from loaded model metadata
+  - controls are shown/hidden based on detected capabilities
+- Model-family behavior currently used in practice:
+  - `Base` models: custom voice cloning flow enabled
+  - `CustomVoice` models: named speaker flow enabled
+- Studio behavior:
+  - model selector + language in first row
+  - speaker selector in second row for both model families
+  - first named speaker auto-selected when model requires named speakers
+- Voices behavior:
+  - voice extraction/presets enabled only when model supports cloning
+  - speaker presets remain embedding-dimension aware to avoid mismatched reuse
 
 ### In progress / rough edges
 
@@ -32,12 +39,12 @@ Desktop-first local TTS workflow with a modern UI and native C++ inference backe
 
 ## Feature matrix
 
-| Feature | 0.6B | 1.7B |
+| Feature | Base model family | CustomVoice model family |
 |---|---|---|
 | Text-to-speech generation | Yes | Yes |
-| Custom voice cloning (reference WAV/embedding) | Yes | No (intentionally disabled in UI) |
-| Instruction/style prompt | No | Yes |
-| Named speaker dropdown | No | Yes |
+| Custom voice cloning (reference WAV/embedding) | Yes | No |
+| Instruction/style prompt | No (current Base models) | Yes (when capability is present) |
+| Named speaker dropdown | No (current Base models) | Yes |
 
 ## Build and run workflow (Windows)
 
@@ -53,18 +60,21 @@ pwsh -ExecutionPolicy Bypass -File .\scripts\build-native.ps1
 
 3. Configure in app:
 - Setup `Model Directory`
-- Pick `Model Variant` (`0.6B` or `1.7B`)
+- Pick `Model File Name` (the app derives behavior from model capabilities/family)
 
 ## Next milestones
 
 1. Improve Setup validation:
-- detect missing model files and show exact required filenames per mode.
+- detect missing model files and show exact required filenames/dependencies per selected model.
 
 2. Better generation diagnostics:
 - surface backend errors with actionable hints (bad model dir, missing tokenizer/vocoder, etc.).
 
-3. Speaker UX polish (1.7B):
+3. Speaker UX polish (named-speaker models):
 - optional refresh button and loading state for speaker list retrieval.
 
-4. Distribution:
+4. Hybrid-capability model support:
+- support models that expose both named speakers/instruction and cloning in one checkpoint, with explicit UI precedence rules.
+
+5. Distribution:
 - stable Windows package flow (CPU and CUDA variants).
