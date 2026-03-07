@@ -84,7 +84,11 @@ class StudioViewModel : ViewModel() {
             val supportsNamedSpeakers = caps?.supportsNamedSpeakers ?: false
             val supportsInstruction = caps?.supportsInstruction ?: false
             val allowedSpeakers = if (supportsNamedSpeakers) speakers.distinct() else emptyList()
-            val nextSpeaker = state.selectedSpeaker.takeIf { it.isNotBlank() && allowedSpeakers.contains(it) }.orEmpty()
+            val nextSpeaker = if (supportsNamedSpeakers && allowedSpeakers.isNotEmpty()) {
+                state.selectedSpeaker.takeIf { it.isNotBlank() && allowedSpeakers.contains(it) } ?: allowedSpeakers.first()
+            } else {
+                ""
+            }
             state.copy(
                 supportsCloning = supportsCloning,
                 supportsNamedSpeakers = supportsNamedSpeakers,
@@ -140,7 +144,7 @@ class StudioViewModel : ViewModel() {
                         speakerEmbeddingPath.isNullOrBlank() &&
                         referenceWav.isNullOrBlank()
                     ) {
-                        selectedSpeaker
+                        selectedSpeaker ?: latestState.availableSpeakers.firstOrNull()
                     } else {
                         null
                     }
