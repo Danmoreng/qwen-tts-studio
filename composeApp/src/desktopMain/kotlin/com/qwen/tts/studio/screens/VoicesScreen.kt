@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.qwen.tts.studio.viewmodel.ModelVariant
 import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import com.qwen.tts.studio.viewmodel.VoicePreset
 import com.qwen.tts.studio.viewmodel.VoicesViewModel
@@ -39,6 +40,8 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
     val isCreating by viewModel.isCreating.collectAsState()
     val error by viewModel.error.collectAsState()
     val modelDir by settingsViewModel.modelDir.collectAsState()
+    val modelVariant by settingsViewModel.modelVariant.collectAsState()
+    val isModel17 = modelVariant == ModelVariant.MODEL_1_7B
     var presetName by remember { mutableStateOf("") }
     var referencePath by remember { mutableStateOf("") }
     
@@ -92,15 +95,22 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
                 if (error != null) {
                     Text(error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
+                if (isModel17) {
+                    Text(
+                        "Custom voice presets are only available in 0.6B mode. Switch model variant in Setup/Studio.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
                 Button(
                     onClick = {
                         val fallbackName = File(referencePath).nameWithoutExtension
                         val nameToUse = presetName.ifBlank { fallbackName }
-                        viewModel.createVoicePreset(nameToUse, referencePath, modelDir)
+                        viewModel.createVoicePreset(nameToUse, referencePath, modelDir, modelVariant.modelFile)
                         presetName = ""
                         referencePath = ""
                     },
-                    enabled = referencePath.isNotBlank() && !isCreating
+                    enabled = referencePath.isNotBlank() && !isCreating && !isModel17
                 ) {
                     if (isCreating) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)

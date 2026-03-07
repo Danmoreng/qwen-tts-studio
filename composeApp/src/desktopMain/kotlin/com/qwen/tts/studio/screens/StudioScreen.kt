@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.qwen.tts.studio.viewmodel.ModelVariant
 import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import com.qwen.tts.studio.viewmodel.StudioViewModel
 import com.qwen.tts.studio.viewmodel.VoicesViewModel
@@ -32,7 +33,9 @@ fun StudioScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val modelDir by settingsViewModel.modelDir.collectAsState()
+    val modelVariant by settingsViewModel.modelVariant.collectAsState()
     val voices by voicesViewModel.voices.collectAsState()
+    val isModel17 = modelVariant == ModelVariant.MODEL_1_7B
 
     val saverLauncher = rememberFileSaverLauncher { file ->
         file?.path?.let { viewModel.saveAudioToFile(java.io.File(it)) }
@@ -42,6 +45,10 @@ fun StudioScreen(
         if (voices.none { it.name == uiState.selectedVoice } && voices.isNotEmpty()) {
             viewModel.onVoiceChange(voices.first().name)
         }
+    }
+
+    LaunchedEffect(modelDir, modelVariant) {
+        viewModel.refreshAvailableSpeakers(modelDir, modelVariant.modelFile)
     }
 
     Column(
@@ -86,33 +93,66 @@ fun StudioScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Voice Selection
-                var expanded by remember { mutableStateOf(false) }
+                // Model Variant Selection
+                var modelExpanded by remember { mutableStateOf(false) }
                 Box {
                     OutlinedCard(
-                        onClick = { expanded = true },
-                        modifier = Modifier.width(240.dp)
+                        onClick = { modelExpanded = true },
+                        modifier = Modifier.width(190.dp)
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Icon(Icons.Default.Person, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Text(uiState.selectedVoice, fontWeight = FontWeight.Medium)
+                            Icon(Icons.Default.Memory, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Text(modelVariant.label, fontWeight = FontWeight.Medium)
                             Spacer(Modifier.weight(1f))
                             Icon(Icons.Default.ArrowDropDown, contentDescription = null)
                         }
                     }
-                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                        voices.forEach { voice ->
+                    DropdownMenu(expanded = modelExpanded, onDismissRequest = { modelExpanded = false }) {
+                        ModelVariant.entries.forEach { variant ->
                             DropdownMenuItem(
-                                text = { Text(voice.name) },
+                                text = { Text("${variant.label} (${variant.modelFile})") },
                                 onClick = {
-                                    viewModel.onVoiceChange(voice.name)
-                                    expanded = false
+                                    settingsViewModel.setModelVariant(variant)
+                                    modelExpanded = false
                                 }
                             )
+                        }
+                    }
+                }
+
+                if (!isModel17) {
+                    // Voice Selection (0.6B only)
+                    var expanded by remember { mutableStateOf(false) }
+                    Box {
+                        OutlinedCard(
+                            onClick = { expanded = true },
+                            modifier = Modifier.width(240.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Icon(Icons.Default.Person, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Text(uiState.selectedVoice, fontWeight = FontWeight.Medium)
+                                Spacer(Modifier.weight(1f))
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                            }
+                        }
+                        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                            voices.forEach { voice ->
+                                DropdownMenuItem(
+                                    text = { Text(voice.name) },
+                                    onClick = {
+                                        viewModel.onVoiceChange(voice.name)
+                                        expanded = false
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -151,40 +191,91 @@ fun StudioScreen(
             }
         }
 
-        // Instruction / Style Input - Hidden until 1.7B model support is verified
-        if (false) {
+        if (isModel17) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
-                Row(
-                    modifier = Modifier.padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Icon(
-                        Icons.Default.Tune,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(start = 8.dp)
-                    )
-                    TextField(
-                        value = uiState.selectedInstruction,
-                        onValueChange = { viewModel.onInstructionChange(it) },
-                        placeholder = { Text("Style Instruction (e.g. 'whispering', 'excited', 'deep voice')") },
-                        modifier = Modifier.weight(1f),
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = Color.Transparent,
-                            unfocusedContainerColor = Color.Transparent,
-                            disabledContainerColor = Color.Transparent,
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent,
-                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                        ),
-                        singleLine = true
-                    )
+                    if (uiState.availableSpeakers.isNotEmpty()) {
+                        var speakersExpanded by remember { mutableStateOf(false) }
+                        val speakerLabel = if (uiState.selectedSpeaker.isBlank()) {
+                            "Auto (model default)"
+                        } else {
+                            uiState.selectedSpeaker
+                        }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(Icons.Default.RecordVoiceOver, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Box {
+                                OutlinedCard(
+                                    onClick = { speakersExpanded = true },
+                                    modifier = Modifier.width(320.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(speakerLabel, fontWeight = FontWeight.Medium)
+                                        Spacer(Modifier.weight(1f))
+                                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                                    }
+                                }
+                                DropdownMenu(expanded = speakersExpanded, onDismissRequest = { speakersExpanded = false }) {
+                                    DropdownMenuItem(
+                                        text = { Text("Auto (model default)") },
+                                        onClick = {
+                                            viewModel.onSpeakerChange("")
+                                            speakersExpanded = false
+                                        }
+                                    )
+                                    uiState.availableSpeakers.forEach { speaker ->
+                                        DropdownMenuItem(
+                                            text = { Text(speaker) },
+                                            onClick = {
+                                                viewModel.onSpeakerChange(speaker)
+                                                speakersExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.padding(start = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Tune,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        TextField(
+                            value = uiState.selectedInstruction,
+                            onValueChange = { viewModel.onInstructionChange(it) },
+                            placeholder = { Text("Style instruction, e.g. Whispering, calm, close-mic.") },
+                            modifier = Modifier.weight(1f),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                disabledContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                                unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            ),
+                            singleLine = true
+                        )
+                    }
                 }
             }
         }
@@ -228,10 +319,10 @@ fun StudioScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    val speakerEmbeddingPath = voicesViewModel.speakerEmbeddingForVoice(uiState.selectedVoice)
-                    val referenceWav = voicesViewModel.referenceForVoice(uiState.selectedVoice)
+                    val speakerEmbeddingPath = if (isModel17) null else voicesViewModel.speakerEmbeddingForVoice(uiState.selectedVoice)
+                    val referenceWav = if (isModel17) null else voicesViewModel.referenceForVoice(uiState.selectedVoice)
                     Button(
-                        onClick = { viewModel.generateAudio(modelDir, speakerEmbeddingPath, referenceWav) },
+                        onClick = { viewModel.generateAudio(modelDir, modelVariant.modelFile, speakerEmbeddingPath, referenceWav) },
                         enabled = uiState.text.isNotBlank() && !uiState.isGenerating,
                         contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
                     ) {

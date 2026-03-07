@@ -2,6 +2,7 @@ package com.qwen.tts.studio.screens
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -9,7 +10,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
+import com.qwen.tts.studio.viewmodel.ModelVariant
 import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import io.github.vinceglb.filekit.compose.rememberDirectoryPickerLauncher
 
@@ -17,6 +18,7 @@ import io.github.vinceglb.filekit.compose.rememberDirectoryPickerLauncher
 @Composable
 fun SetupScreen(viewModel: SettingsViewModel) {
     val modelDir by viewModel.modelDir.collectAsState()
+    val modelVariant by viewModel.modelVariant.collectAsState()
     
     val launcher = rememberDirectoryPickerLauncher(title = "Select Qwen3 Model Directory") { directory ->
         directory?.path?.let { viewModel.setModelDir(it) }
@@ -37,7 +39,7 @@ fun SetupScreen(viewModel: SettingsViewModel) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Qwen3 Model Directory", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
-                        "Select the folder containing 'qwen3-tts-0.6b-f16.gguf' and 'qwen3-tts-tokenizer-f16.gguf'",
+                        "Select the folder containing tokenizer/vocoder files and your target qwen3-tts model file.",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
@@ -58,6 +60,45 @@ fun SetupScreen(viewModel: SettingsViewModel) {
                             Icon(Icons.Default.FolderOpen, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
                             Text("Browse")
+                        }
+                    }
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Model Variant", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "Switch between 0.6B (custom voice cloning) and 1.7B (instruction + named speakers).",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                    var variantExpanded by remember { mutableStateOf(false) }
+                    Box {
+                        OutlinedCard(
+                            onClick = { variantExpanded = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(modelVariant.label, style = MaterialTheme.typography.bodyLarge)
+                                Spacer(Modifier.weight(1f))
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                            }
+                        }
+                        DropdownMenu(
+                            expanded = variantExpanded,
+                            onDismissRequest = { variantExpanded = false }
+                        ) {
+                            ModelVariant.entries.forEach { variant ->
+                                DropdownMenuItem(
+                                    text = { Text("${variant.label} (${variant.modelFile})") },
+                                    onClick = {
+                                        viewModel.setModelVariant(variant)
+                                        variantExpanded = false
+                                    }
+                                )
+                            }
                         }
                     }
                 }

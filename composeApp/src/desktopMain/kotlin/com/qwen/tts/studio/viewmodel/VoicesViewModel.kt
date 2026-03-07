@@ -49,7 +49,7 @@ class VoicesViewModel : ViewModel() {
         }
     }.asCoroutineDispatcher()
 
-    fun createVoicePreset(name: String, referenceWav: String, modelDir: String) {
+    fun createVoicePreset(name: String, referenceWav: String, modelDir: String, modelName: String?) {
         val wavFile = File(referenceWav)
         if (!wavFile.exists() || !wavFile.isFile) {
             _error.value = "Reference audio file does not exist."
@@ -82,7 +82,8 @@ class VoicesViewModel : ViewModel() {
                     File(embeddingsDir, "$voiceId.json")
                 }
 
-                val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir) }
+                val resolvedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
+                val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, resolvedModelName) }
                 if (!loaded) {
                     _error.value = "Failed to load Qwen3 models for speaker embedding extraction."
                     return@launch
