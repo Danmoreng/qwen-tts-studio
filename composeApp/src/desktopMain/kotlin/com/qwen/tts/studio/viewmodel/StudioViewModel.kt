@@ -14,13 +14,23 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.util.concurrent.Executors
-import javax.sound.sampled.*
+import javax.sound.sampled.AudioFileFormat
+import javax.sound.sampled.AudioFormat
+import javax.sound.sampled.AudioInputStream
+import javax.sound.sampled.AudioSystem
+import javax.sound.sampled.DataLine
+import javax.sound.sampled.SourceDataLine
 
 data class StudioUiState(
     val text: String = "Another test bites the dust.",
     val selectedVoice: String = "Default Voice (Model)",
     val availableSpeakers: List<String> = emptyList(),
     val selectedSpeaker: String = "",
+    val supportsCloning: Boolean = true,
+    val supportsNamedSpeakers: Boolean = false,
+    val supportsInstruction: Boolean = false,
+    val speakerEmbeddingDim: Int = 0,
+    val modelKind: Int = QwenEngine.MODEL_KIND_UNKNOWN,
     val selectedLanguage: String = "English",
     val selectedInstruction: String = "",
     val isGenerating: Boolean = false,
@@ -38,7 +48,6 @@ class StudioViewModel : ViewModel() {
     private val qwenEngine = QwenEngine()
     private var lastGeneratedAudio: FloatArray? = null
     private val nativeDispatcher = Executors.newSingleThreadExecutor { runnable ->
-        // Native model loading can require a deeper stack than coroutine scheduler worker threads.
         Thread(null, runnable, "QwenNativeThread", 8L * 1024 * 1024).apply {
             isDaemon = true
         }
@@ -66,8 +75,27 @@ class StudioViewModel : ViewModel() {
         _uiState.update { it.copy(selectedInstruction = newInstruction) }
     }
 
-    private fun supportsModel17Features(modelName: String?): Boolean {
-        return modelName?.contains("1.7b", ignoreCase = true) == true
+    private fun applyCapabilitiesAndSpeakers(
+        caps: QwenEngine.NativeCapabilities?,
+        speakers: List<String>
+    ) {
+        _uiState.update { state ->
+            val supportsCloning = caps?.supportsCloning ?: true
+            val supportsNamedSpeakers = caps?.supportsNamedSpeakers ?: false
+            val supportsInstruction = caps?.supportsInstruction ?: false
+            val allowedSpeakers = if (supportsNamedSpeakers) speakers.distinct() else emptyList()
+            val nextSpeaker = state.selectedSpeaker.takeIf { it.isNotBlank() && allowedSpeakers.contains(it) }.orEmpty()
+            state.copy(
+                supportsCloning = supportsCloning,
+                supportsNamedSpeakers = supportsNamedSpeakers,
+                supportsInstruction = supportsInstruction,
+                speakerEmbeddingDim = caps?.speakerEmbeddingDim ?: 0,
+                modelKind = caps?.modelKind ?: QwenEngine.MODEL_KIND_UNKNOWN,
+                availableSpeakers = allowedSpeakers,
+                selectedSpeaker = if (supportsNamedSpeakers) nextSpeaker else "",
+                selectedInstruction = if (supportsInstruction) state.selectedInstruction else ""
+            )
+        }
     }
 
     fun generateAudio(
@@ -85,11 +113,10 @@ class StudioViewModel : ViewModel() {
 
         viewModelScope.launch {
             _uiState.update { it.copy(isGenerating = true, error = null, hasAudio = false) }
-            
+
             try {
                 withContext(Dispatchers.IO) {
                     val resolvedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
-                    val useModel17Features = supportsModel17Features(resolvedModelName)
                     val loaded = withContext(nativeDispatcher) {
                         qwenEngine.load(modelDir, resolvedModelName)
                     }
@@ -97,42 +124,41 @@ class StudioViewModel : ViewModel() {
                         throw Exception("Failed to load Qwen3 models from directory.")
                     }
 
-                    if (useModel17Features) {
-                        val speakers = withContext(nativeDispatcher) {
-                            qwenEngine.getAvailableSpeakers()
-                        }
-                        _uiState.update { state ->
-                            val normalized = speakers.distinct()
-                            val nextSpeaker = state.selectedSpeaker.takeIf { it.isNotBlank() && normalized.contains(it) }.orEmpty()
-                            state.copy(availableSpeakers = normalized, selectedSpeaker = nextSpeaker)
-                        }
+                    val caps = withContext(nativeDispatcher) { qwenEngine.getModelCapabilities() }
+                    val speakers = if (caps?.supportsNamedSpeakers == true) {
+                        withContext(nativeDispatcher) { qwenEngine.getAvailableSpeakers() }
                     } else {
-                        _uiState.update { state ->
-                            state.copy(availableSpeakers = emptyList(), selectedSpeaker = "", selectedInstruction = "")
-                        }
+                        emptyList()
                     }
+                    applyCapabilitiesAndSpeakers(caps, speakers)
 
-                    // Re-read state in case it changed during load
                     val latestState = _uiState.value
                     val langId = QwenEngine.mapLanguageToId(latestState.selectedLanguage)
                     val selectedSpeaker = latestState.selectedSpeaker.takeIf { it.isNotBlank() }
-                    val effectiveSpeaker = if (!useModel17Features || !speakerEmbeddingPath.isNullOrBlank() || !referenceWav.isNullOrBlank()) {
-                        null
-                    } else {
+                    val effectiveSpeaker = if (
+                        latestState.supportsNamedSpeakers &&
+                        speakerEmbeddingPath.isNullOrBlank() &&
+                        referenceWav.isNullOrBlank()
+                    ) {
                         selectedSpeaker
+                    } else {
+                        null
+                    }
+                    val effectiveEmbedding = if (latestState.supportsCloning) speakerEmbeddingPath else null
+                    val effectiveReference = if (latestState.supportsCloning) referenceWav else null
+                    val effectiveInstruction = if (latestState.supportsInstruction) {
+                        latestState.selectedInstruction.takeIf { it.isNotBlank() }
+                    } else {
+                        null
                     }
 
                     val audio = withContext(nativeDispatcher) {
                         qwenEngine.generate(
                             text = latestState.text,
-                            referenceWav = referenceWav,
-                            speakerEmbeddingPath = speakerEmbeddingPath,
+                            referenceWav = effectiveReference,
+                            speakerEmbeddingPath = effectiveEmbedding,
                             languageId = langId,
-                            instruction = if (useModel17Features) {
-                                latestState.selectedInstruction.takeIf { it.isNotBlank() }
-                            } else {
-                                null
-                            },
+                            instruction = effectiveInstruction,
                             speaker = effectiveSpeaker
                         )
                     }
@@ -152,24 +178,20 @@ class StudioViewModel : ViewModel() {
         }
     }
 
-    fun refreshAvailableSpeakers(modelDir: String, modelName: String?) {
+    fun refreshModelCapabilities(modelDir: String, modelName: String?) {
         if (modelDir.isBlank() || _uiState.value.isGenerating) return
         viewModelScope.launch(Dispatchers.IO) {
             val resolvedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
-            val useModel17Features = supportsModel17Features(resolvedModelName)
-            if (!useModel17Features) {
-                _uiState.update { state ->
-                    state.copy(availableSpeakers = emptyList(), selectedSpeaker = "", selectedInstruction = "")
-                }
-                return@launch
-            }
             val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, resolvedModelName) }
             if (!loaded) return@launch
-            val speakers = withContext(nativeDispatcher) { qwenEngine.getAvailableSpeakers() }.distinct()
-            _uiState.update { state ->
-                val nextSpeaker = state.selectedSpeaker.takeIf { it.isNotBlank() && speakers.contains(it) }.orEmpty()
-                state.copy(availableSpeakers = speakers, selectedSpeaker = nextSpeaker)
+
+            val caps = withContext(nativeDispatcher) { qwenEngine.getModelCapabilities() }
+            val speakers = if (caps?.supportsNamedSpeakers == true) {
+                withContext(nativeDispatcher) { qwenEngine.getAvailableSpeakers() }
+            } else {
+                emptyList()
             }
+            applyCapabilitiesAndSpeakers(caps, speakers)
         }
     }
 
@@ -191,7 +213,7 @@ class StudioViewModel : ViewModel() {
                     buffer[i * 2] = (sample and 0xFF).toByte()
                     buffer[i * 2 + 1] = ((sample shr 8) and 0xFF).toByte()
                 }
-                
+
                 ByteArrayInputStream(buffer).use { bais ->
                     AudioInputStream(bais, format, samples.size.toLong()).use { ais ->
                         AudioSystem.write(ais, AudioFileFormat.Type.WAVE, file)
@@ -209,21 +231,21 @@ class StudioViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 _uiState.update { it.copy(isPlaying = true) }
-                
+
                 val format = AudioFormat(24000f, 16, 1, true, false)
                 val info = DataLine.Info(SourceDataLine::class.java, format)
                 val line = AudioSystem.getLine(info) as SourceDataLine
-                
+
                 line.open(format)
                 line.start()
-                
+
                 val buffer = ByteArray(samples.size * 2)
                 for (i in samples.indices) {
                     val sample = (samples[i] * 32767).toInt().coerceIn(-32768, 32767)
                     buffer[i * 2] = (sample and 0xFF).toByte()
                     buffer[i * 2 + 1] = ((sample shr 8) and 0xFF).toByte()
                 }
-                
+
                 line.write(buffer, 0, buffer.size)
                 line.drain()
                 line.close()

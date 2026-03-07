@@ -35,7 +35,22 @@ class QwenEngine {
         val threads: Int = 4
     )
 
+    data class NativeCapabilities(
+        val loaded: Boolean,
+        val supportsCloning: Boolean,
+        val supportsNamedSpeakers: Boolean,
+        val supportsInstruction: Boolean,
+        val speakerEmbeddingDim: Int,
+        val modelKind: Int,
+        val speakerCount: Int
+    )
+
     companion object {
+        const val MODEL_KIND_UNKNOWN = 0
+        const val MODEL_KIND_BASE = 1
+        const val MODEL_KIND_CUSTOM_VOICE = 2
+        const val MODEL_KIND_VOICE_DESIGN = 3
+
         private var isNativeLoaded = false
         private val loadLock = Any()
 
@@ -214,6 +229,7 @@ class QwenEngine {
     ): NativeResult?
     private external fun nativeExtractSpeakerEmbedding(ptr: Long, referenceWav: String, outputPath: String): Boolean
     private external fun nativeGetAvailableSpeakers(ptr: Long): String?
+    private external fun nativeGetModelCapabilities(ptr: Long): NativeCapabilities?
 
     fun load(modelDir: String, modelName: String? = null): Boolean {
         if (!File(modelDir).exists() || !File(modelDir).isDirectory) return false
@@ -307,6 +323,19 @@ class QwenEngine {
         } catch (e: Throwable) {
             e.printStackTrace()
             emptyList()
+        }
+    }
+
+    fun getModelCapabilities(): NativeCapabilities? {
+        if (useCliFallback) {
+            return inferCapabilitiesFromModelName(loadedModelName)
+        }
+        if (nativePtr == 0L) return null
+        return try {
+            nativeGetModelCapabilities(nativePtr)
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            null
         }
     }
 
@@ -420,6 +449,28 @@ class QwenEngine {
             return false
         }
         return File(outputPath).exists()
+    }
+
+    private fun inferCapabilitiesFromModelName(modelName: String?): NativeCapabilities {
+        val normalized = modelName.orEmpty().lowercase()
+        val isCustomVoice = normalized.contains("customvoice")
+        val isBase = normalized.contains("base")
+        val is17 = normalized.contains("1.7b")
+        val dim = if (is17) 2048 else 1024
+        val modelKind = when {
+            isCustomVoice -> MODEL_KIND_CUSTOM_VOICE
+            isBase -> MODEL_KIND_BASE
+            else -> MODEL_KIND_UNKNOWN
+        }
+        return NativeCapabilities(
+            loaded = true,
+            supportsCloning = isBase,
+            supportsNamedSpeakers = isCustomVoice,
+            supportsInstruction = isCustomVoice && is17,
+            speakerEmbeddingDim = dim,
+            modelKind = modelKind,
+            speakerCount = 0
+        )
     }
 
     private fun readWavToFloatArray(file: File): FloatArray {

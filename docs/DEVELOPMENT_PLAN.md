@@ -1,83 +1,70 @@
-# Specification & Development Plan: Qwen-TTS Studio
+# Qwen-TTS Studio Development Plan
 
-## 1. Project Overview
+## Project goal
 
-**Name:** Qwen-TTS Studio
-**Description:** A native, minimalist desktop application (Windows & Linux) for local speech synthesis (Text-to-Speech) based on the Qwen3-TTS/CosyVoice model. The app utilizes an efficient C++ backend for inference and provides a modern, hardware-accelerated UI.
-**Target Platforms:** Windows (.exe/.msi) and Linux (.deb/.rpm)
-**Core Philosophy:** Local processing (Privacy-first), ultra-low latency, modern "Pro-Tool" UI (Dark Mode), and ease of use.
+Desktop-first local TTS workflow with a modern UI and native C++ inference backend.
 
-## 2. Technology Stack
+## Current implementation snapshot (March 2026)
 
-*   **UI Framework:** Compose Multiplatform (CMP) by JetBrains.
-*   **Programming Language (Frontend):** Kotlin.
-*   **Architecture:** Kotlin Multiplatform (KMP) focused on JVM Desktop.
-*   **State Management:** Kotlin Coroutines & StateFlow (MVI/MVVM Pattern).
-*   **Backend / AI Inference:** Local C++ backend based on [qwen3-tts.cpp](https://github.com/Danmoreng/qwen3-tts.cpp/tree/feat/cuda-support) (a fork of predict-woo/qwen3-tts.cpp using ggml).
-*   **Bridge (Kotlin <-> C++):** JNA (Java Native Access) or Project Panama (FFI) to call the engine's shared library (.dll/.so) asynchronously.
-*   **Audio Playback:** JVM Standard Audio (javax.sound.sampled) or dedicated KMP Audio Library.
+### Completed
 
-## 3. Core Features (MVP - Minimum Viable Product)
+- Desktop app UI with three areas:
+  - `Studio` (generation)
+  - `Voices` (voice presets from reference audio)
+  - `Setup` (model configuration)
+- Native bridge integration using JNI (`qwen3_tts.dll`).
+- Submodule backend upgraded to newer `qwen3-tts.cpp` branch with:
+  - model-name aware loading
+  - named speaker API
+  - instruction + speaker plumbing in JNI/C/KMP layers
+- Model variant switch in UI:
+  - `0.6B` mode
+  - `1.7B` mode
+- Mode-dependent behavior:
+  - `0.6B`: custom voices enabled (reference/embedding path flow)
+  - `1.7B`: instruction input + named speakers, custom voices disabled
 
-### 3.1. Speech Synthesis (Studio View)
-*   **Text Input:** Large text field (max. 5000 characters).
-*   **Voice Selection:** Dropdown to select system and cloned voices.
-*   **Emotion Control:** Chips ("Neutral", "Happy", "Whisper", "Dynamic") that set internal prompt prefixes for the Qwen3 model.
-*   **Audio Player:** Playback of generated audio including visual waveform (simulated or real) and download/export function (.wav).
+### In progress / rough edges
 
-### 3.2. Voice Cloning (Voices View)
-*   **Zero-Shot Cloning:** Upload functionality for short audio samples (3-10 seconds, .wav).
-*   **Voice Management:** List of cloned voices with a delete function.
-*   **Note:** Voices are stored locally as metadata (path to sample & name) in a simple JSON or SQLite/Room database.
+- Packaging and onboarding are still developer-oriented.
+- Runtime and model validation UX can be improved (clearer diagnostics in Setup).
+- Linux path and runtime validation is not yet fully documented/tested.
 
-### 3.3. Setup & Monitoring (Settings View)
-*   **Model Path:** Configuration of the file path to local Qwen3 model weights (.gguf or .bin).
-*   **Hardware Acceleration:** Dropdown (CPU, CUDA, Vulkan).
-*   **Live Monitoring:** Display of RAM usage and CPU/GPU status in the app header.
+## Feature matrix
 
-### 3.4. UI/UX Features
-*   System-native Dark Mode & Light Mode support.
-*   Navigation Rail (sidebar) for quick switching between views.
-*   Modern Material 3 design without classic OS window frames (optional: Undecorated Window with Custom Titlebar).
+| Feature | 0.6B | 1.7B |
+|---|---|---|
+| Text-to-speech generation | Yes | Yes |
+| Custom voice cloning (reference WAV/embedding) | Yes | No (intentionally disabled in UI) |
+| Instruction/style prompt | No | Yes |
+| Named speaker dropdown | No | Yes |
 
-## 4. Development Roadmap (Step-by-Step Plan)
+## Build and run workflow (Windows)
 
-This plan builds the app iteratively. Each step results in a runnable intermediate state.
+1. Build native backend:
+```powershell
+pwsh -ExecutionPolicy Bypass -File .\scripts\build-native.ps1
+```
 
-### Phase 1: Project Setup & Infrastructure
-- [ ] Generate the KMP Desktop project via JetBrains Wizard.
-- [ ] Configure `build.gradle.kts` for Compose Desktop.
-- [ ] Set up the entry point (`main.kt`) including window size, title, and icon.
-- [ ] Set up the basic theme structure (Colors, Typography for Dark/Light Mode).
+2. Run desktop app:
+```powershell
+.\gradlew.bat :composeApp:run
+```
 
-### Phase 2: UI Framework & Navigation (Mockup -> Compose)
-- [ ] Build the Navigation Rail (sidebar) and the main layout container.
-- [ ] Implement the header including the simulated hardware monitor.
-- [ ] Create basic routing/navigation state (switching between Studio, Voices, Setup).
+3. Configure in app:
+- Setup `Model Directory`
+- Pick `Model Variant` (`0.6B` or `1.7B`)
 
-### Phase 3: Detailed UI Implementation (Screens)
-- [ ] **Studio Screen:** Text field, Voice dropdown, Emotion chips, and the "Read Aloud" button.
-- [ ] **Player Component:** Build the audio bar with animated Canvas waveform.
-- [ ] **Voices Screen:** Grid layout for existing voices and the "Clone New Voice" card including OS file picker (AWT FileDialog).
-- [ ] **Setup Screen:** Input fields for model paths.
+## Next milestones
 
-### Phase 4: State Management & Logic Layer
-- [ ] Create ViewModels/Controllers for the screens (separation of UI and logic).
-- [ ] Implement local data storage (Preferences/JSON) for settings and saved voices.
-- [ ] Connect UI actions (e.g., button clicks) to ViewModels (initially with simulated delays/mock data).
+1. Improve Setup validation:
+- detect missing model files and show exact required filenames per mode.
 
-### Phase 5: The C++ Bridge (Kotlin Native Interop)
-- [ ] Define the C++ interface (functions provided by the .dll/.so, e.g., `generate_audio(text, emotion, voice_sample_path)`).
-- [ ] Set up JNA (or FFI) in Kotlin to call the native functions.
-- [ ] Implement an asynchronous wrapper (suspend functions) to prevent UI freezing during generation.
-- [ ] Integrate actual hardware monitoring (reading RAM/CPU via JVM APIs).
+2. Better generation diagnostics:
+- surface backend errors with actionable hints (bad model dir, missing tokenizer/vocoder, etc.).
 
-### Phase 6: Audio Processing & Polish
-- [ ] Implement native audio playback to play the byte stream (PCM/WAV) returned by the C++ backend.
-- [ ] Export function: Save the byte stream as a .wav file on disk.
-- [ ] Final bug fixing, optimization of UI transitions and animations.
+3. Speaker UX polish (1.7B):
+- optional refresh button and loading state for speaker list retrieval.
 
-### Phase 7: Packaging & Distribution
-- [ ] Configure ProGuard/R8 for code minimization (optional).
-- [ ] Execute `packageDistributionForCurrentOS` task for Windows (.msi).
-- [ ] Execute the task for Linux (.deb).
+4. Distribution:
+- stable Windows package flow (CPU and CUDA variants).
