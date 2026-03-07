@@ -1,18 +1,24 @@
 package com.qwen.tts.studio
 
 import androidx.compose.runtime.*
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
+import androidx.compose.ui.window.rememberWindowState
 import java.awt.Color
 import java.awt.Window as AwtWindow
 import javax.swing.SwingUtilities
 
 fun main() = application {
     var isDarkMode by remember { mutableStateOf(true) }
+    val windowState = rememberWindowState(width = 1440.dp, height = 920.dp)
 
     Window(
         onCloseRequest = ::exitApplication,
         title = "Qwen-TTS Studio",
+        icon = painterResource("icons/app-icon.svg"),
+        state = windowState,
     ) {
         // Apply dark title bar if possible (Windows 10/11)
         val window = window

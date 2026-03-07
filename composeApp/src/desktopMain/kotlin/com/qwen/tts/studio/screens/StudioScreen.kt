@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -55,6 +56,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.qwen.tts.studio.viewmodel.SettingsViewModel
@@ -130,10 +132,10 @@ fun StudioScreen(
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 var modelExpanded by remember { mutableStateOf(false) }
-                Box {
+                Box(modifier = Modifier.widthIn(max = 430.dp)) {
                     OutlinedCard(
                         onClick = { modelExpanded = true },
-                        modifier = Modifier.width(280.dp)
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
@@ -141,8 +143,13 @@ fun StudioScreen(
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             Icon(Icons.Default.Memory, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Text(modelName.ifBlank { "Select model file" }, fontWeight = FontWeight.Medium)
-                            Spacer(Modifier.weight(1f))
+                            Text(
+                                text = modelName.ifBlank { "Select model file" },
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
                             Icon(Icons.Default.ArrowDropDown, contentDescription = null)
                         }
                     }
@@ -159,44 +166,12 @@ fun StudioScreen(
                     }
                 }
 
-                if (uiState.supportsCloning) {
-                    var expanded by remember { mutableStateOf(false) }
-                    Box {
-                        OutlinedCard(
-                            onClick = { expanded = true },
-                            modifier = Modifier.width(240.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                Icon(Icons.Default.Person, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                                Text(uiState.selectedVoice, fontWeight = FontWeight.Medium)
-                                Spacer(Modifier.weight(1f))
-                                Icon(Icons.Default.ArrowDropDown, contentDescription = null)
-                            }
-                        }
-                        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                            voices.forEach { voice ->
-                                DropdownMenuItem(
-                                    text = { Text(voice.name) },
-                                    onClick = {
-                                        viewModel.onVoiceChange(voice.name)
-                                        expanded = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-
                 var langExpanded by remember { mutableStateOf(false) }
                 val languages = listOf("English", "German", "French", "Spanish", "Chinese", "Japanese", "Korean", "Russian", "Italian", "Portuguese")
                 Box {
                     OutlinedCard(
                         onClick = { langExpanded = true },
-                        modifier = Modifier.width(180.dp)
+                        modifier = Modifier.width(200.dp)
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
@@ -224,101 +199,113 @@ fun StudioScreen(
             }
         }
 
-        if (uiState.supportsNamedSpeakers || uiState.supportsInstruction) {
+        if (uiState.supportsCloning || uiState.supportsNamedSpeakers) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
-                Column(
+                Row(
                     modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     if (uiState.supportsNamedSpeakers) {
-                        if (uiState.availableSpeakers.isNotEmpty()) {
-                            var speakersExpanded by remember { mutableStateOf(false) }
-                            val speakerLabel = if (uiState.selectedSpeaker.isBlank()) {
-                                "Auto (model default)"
-                            } else {
-                                uiState.selectedSpeaker
-                            }
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        val speakerLabel = uiState.selectedSpeaker.ifBlank { uiState.availableSpeakers.firstOrNull().orEmpty() }
+                        var speakersExpanded by remember { mutableStateOf(false) }
+                        Icon(Icons.Default.RecordVoiceOver, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Box {
+                            OutlinedCard(
+                                onClick = { speakersExpanded = true },
+                                modifier = Modifier.width(360.dp)
                             ) {
-                                Icon(Icons.Default.RecordVoiceOver, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                                Box {
-                                    OutlinedCard(
-                                        onClick = { speakersExpanded = true },
-                                        modifier = Modifier.width(320.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(speakerLabel, fontWeight = FontWeight.Medium)
-                                            Spacer(Modifier.weight(1f))
-                                            Icon(Icons.Default.ArrowDropDown, contentDescription = null)
-                                        }
-                                    }
-                                    DropdownMenu(expanded = speakersExpanded, onDismissRequest = { speakersExpanded = false }) {
-                                        DropdownMenuItem(
-                                            text = { Text("Auto (model default)") },
-                                            onClick = {
-                                                viewModel.onSpeakerChange("")
-                                                speakersExpanded = false
-                                            }
-                                        )
-                                        uiState.availableSpeakers.forEach { speaker ->
-                                            DropdownMenuItem(
-                                                text = { Text(speaker) },
-                                                onClick = {
-                                                    viewModel.onSpeakerChange(speaker)
-                                                    speakersExpanded = false
-                                                }
-                                            )
-                                        }
-                                    }
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(speakerLabel, fontWeight = FontWeight.Medium)
+                                    Spacer(Modifier.weight(1f))
+                                    Icon(Icons.Default.ArrowDropDown, contentDescription = null)
                                 }
                             }
-                        } else {
-                            Text(
-                                "Model reports named-speaker mode, but no speakers were found.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            DropdownMenu(expanded = speakersExpanded, onDismissRequest = { speakersExpanded = false }) {
+                                uiState.availableSpeakers.forEach { speaker ->
+                                    DropdownMenuItem(
+                                        text = { Text(speaker) },
+                                        onClick = {
+                                            viewModel.onSpeakerChange(speaker)
+                                            speakersExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    } else if (uiState.supportsCloning) {
+                        var expanded by remember { mutableStateOf(false) }
+                        Icon(Icons.Default.Person, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Box {
+                            OutlinedCard(
+                                onClick = { expanded = true },
+                                modifier = Modifier.width(360.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(uiState.selectedVoice, fontWeight = FontWeight.Medium)
+                                    Spacer(Modifier.weight(1f))
+                                    Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                                }
+                            }
+                            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                                voices.forEach { voice ->
+                                    DropdownMenuItem(
+                                        text = { Text(voice.name) },
+                                        onClick = {
+                                            viewModel.onVoiceChange(voice.name)
+                                            expanded = false
+                                        }
+                                    )
+                                }
+                            }
                         }
                     }
+                }
+            }
+        }
 
-                    if (uiState.supportsInstruction) {
-                        Row(
-                            modifier = Modifier.padding(start = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Tune,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                            TextField(
-                                value = uiState.selectedInstruction,
-                                onValueChange = { viewModel.onInstructionChange(it) },
-                                placeholder = { Text("Style instruction, e.g. Whispering, calm, close-mic.") },
-                                modifier = Modifier.weight(1f),
-                                colors = TextFieldDefaults.colors(
-                                    focusedContainerColor = Color.Transparent,
-                                    unfocusedContainerColor = Color.Transparent,
-                                    disabledContainerColor = Color.Transparent,
-                                    focusedIndicatorColor = Color.Transparent,
-                                    unfocusedIndicatorColor = Color.Transparent,
-                                    focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                                    unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                                ),
-                                singleLine = true
-                            )
-                        }
-                    }
+        if (uiState.supportsInstruction) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Tune,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    TextField(
+                        value = uiState.selectedInstruction,
+                        onValueChange = { viewModel.onInstructionChange(it) },
+                        placeholder = { Text("Style instruction, e.g. Whispering, calm, close-mic.") },
+                        modifier = Modifier.weight(1f),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
+                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                        ),
+                        singleLine = true
+                    )
                 }
             }
         }
