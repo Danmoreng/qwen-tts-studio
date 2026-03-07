@@ -2,22 +2,27 @@
 
 Qwen-TTS Studio is a desktop app (Compose Multiplatform) for local text-to-speech using a native C++ backend (`qwen3-tts.cpp` submodule).
 
+## Screenshot
+
+![Qwen-TTS Studio Screenshot](docs/images/studio-screenshot.png)
+
 ## Status
 
-This project is still alpha, but both major model variants are now integrated in the UI.
+This project is still alpha, but model capability detection is integrated in the UI.
 
-### Supported model modes
+### Model capability detection
 
-- `0.6B` mode:
-  - Voice cloning from reference WAV.
-  - Speaker embedding extraction and preset management.
-  - No instruction UI.
-- `1.7B` mode:
-  - Style instructions.
-  - Named speaker selection from model-provided speaker list.
-  - Custom voice cloning is intentionally disabled in this mode.
+The app now detects capabilities from the loaded model metadata and adapts controls automatically:
 
-The model mode is selected in the app via dropdown (`0.6B` / `1.7B`), and the matching model file is applied automatically.
+- If model supports cloning:
+  - Voices page can extract/save custom speaker presets.
+  - Studio uses reference/embedding voices.
+- If model supports named speakers:
+  - Studio shows named speaker dropdown and selects first speaker by default.
+- If model supports instruction:
+  - Studio shows instruction field.
+
+This allows different behavior for models like `0.6B-Base`, `1.7B-Base`, and `1.7B-CustomVoice` without hardcoding one static mode switch.
 
 ## Tech stack
 
@@ -44,13 +49,14 @@ pwsh -ExecutionPolicy Bypass -File .\scripts\build-native.ps1
 
 4. In `Setup`:
 - Select `Model Directory`.
-- Select `Model Variant` (`0.6B` or `1.7B`).
+- Select `Model File Name` (detected `.gguf` list is provided).
 
 ## Notes
 
 - You still need compatible local model files in your model directory.
-- In `1.7B`, use named speakers from the speaker dropdown in Studio.
-- In `0.6B`, use Voices page for custom speaker presets.
+- Speaker presets are embedding-dimension aware (`1024` vs `2048`) to avoid mismatched reuse.
+- Some models require named speakers (for example CustomVoice); Studio auto-selects the first available speaker.
+- App window now uses a custom icon from `composeApp/src/desktopMain/resources/icons/app-icon.svg`.
 
 ## Documentation
 
