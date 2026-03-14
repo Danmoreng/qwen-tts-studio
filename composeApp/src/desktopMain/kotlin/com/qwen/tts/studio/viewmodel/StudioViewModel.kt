@@ -19,6 +19,7 @@ import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioInputStream
 import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.DataLine
+import javax.sound.sampled.Mixer
 import javax.sound.sampled.SourceDataLine
 
 data class StudioUiState(
@@ -231,6 +232,39 @@ class StudioViewModel : ViewModel() {
         }
     }
 
+    private fun findWorkingMixer(format: AudioFormat): Mixer? {
+        val mixers = AudioSystem.getMixerInfo()
+        println("[StudioViewModel] Found ${mixers.size} mixers.")
+        
+        // Preference 1: PulseAudio/Pipewire if available (often named "PulseAudio" or "Default Audio Device")
+        // Preference 2: "Groove" as found in user environment
+        // Preference 3: Generic Analog
+        val sortedMixers = mixers.sortedByDescending { info ->
+            val name = info.name.lowercase()
+            when {
+                name.contains("pulse") || name.contains("pipewire") || name.contains("default") -> 100
+                name.contains("groove") -> 90
+                name.contains("analog") || name.contains("generic") -> 50
+                else -> 0
+            }
+        }
+
+        for (info in sortedMixers) {
+            try {
+                val mixer = AudioSystem.getMixer(info)
+                val lineInfo = DataLine.Info(SourceDataLine::class.java, format)
+                if (mixer.isLineSupported(lineInfo)) {
+                    println("[StudioViewModel] Using mixer: ${info.name}")
+                    return mixer
+                }
+            } catch (e: Exception) {
+                println("[StudioViewModel] Failed to check mixer ${info.name}: ${e.message}")
+            }
+        }
+        println("[StudioViewModel] No suitable mixer found, falling back to default.")
+        return null
+    }
+
     private fun playAudio(samples: FloatArray) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -238,10 +272,18 @@ class StudioViewModel : ViewModel() {
 
                 val format = AudioFormat(24000f, 16, 1, true, false)
                 val info = DataLine.Info(SourceDataLine::class.java, format)
-                val line = AudioSystem.getLine(info) as SourceDataLine
+                
+                val mixer = findWorkingMixer(format)
+                val line = if (mixer != null) {
+                    mixer.getLine(info) as SourceDataLine
+                } else {
+                    AudioSystem.getLine(info) as SourceDataLine
+                }
 
+                println("[StudioViewModel] Opening audio line...")
                 line.open(format)
                 line.start()
+                println("[StudioViewModel] Audio line started.")
 
                 val buffer = ByteArray(samples.size * 2)
                 for (i in samples.indices) {
@@ -250,10 +292,13 @@ class StudioViewModel : ViewModel() {
                     buffer[i * 2 + 1] = ((sample shr 8) and 0xFF).toByte()
                 }
 
+                println("[StudioViewModel] Writing to audio line (${buffer.size} bytes)...")
                 line.write(buffer, 0, buffer.size)
                 line.drain()
                 line.close()
+                println("[StudioViewModel] Playback finished.")
             } catch (e: Exception) {
+                System.err.println("[StudioViewModel] Playback failed: ${e.message}")
                 e.printStackTrace()
             } finally {
                 _uiState.update { it.copy(isPlaying = false) }

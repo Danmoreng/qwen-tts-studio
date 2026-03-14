@@ -24,9 +24,12 @@ local.properties
 composeApp/build/
 .jna/
 *.dll
+*.so
 *.exp
 *.lib
 *.wav
 output.wav
 external/build/
+external/build-linux/
+qwen3-tts-cli
 models/
