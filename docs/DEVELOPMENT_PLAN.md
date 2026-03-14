@@ -13,7 +13,7 @@ Desktop-first local TTS workflow with a modern UI and native C++ inference backe
   - `Voices` (voice presets from reference audio)
   - `Setup` (model configuration)
 - Native bridge integration using JNI (`qwen3_tts.dll`).
-- Submodule backend upgraded to newer `qwen3-tts.cpp` branch with:
+- Submodule backend now tracks `qwen3-tts.cpp` `main` after the architecture refactor, with:
   - model-name aware loading
   - named speaker API
   - instruction + speaker plumbing in JNI/C/KMP layers

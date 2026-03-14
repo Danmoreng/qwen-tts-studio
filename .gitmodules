@@ -1,4 +1,4 @@
 [submodule "external/qwen3-tts-cpp"]
 	path = external/qwen3-tts-cpp
 	url = https://github.com/Danmoreng/qwen3-tts.cpp.git
-	branch = feat/kotlin-multiplatform
+	branch = main
