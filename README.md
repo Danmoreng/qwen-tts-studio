@@ -28,7 +28,7 @@ This allows different behavior for models like `0.6B-Base`, `1.7B-Base`, and `1.
 
 - Frontend: Kotlin + Compose Multiplatform (desktop)
 - Native backend: `external/qwen3-tts-cpp` (C++/ggml)
-- Bridge: JNI (`qwen3_tts.dll` loaded by desktop app)
+- Bridge: JNI (`qwen3_tts.dll` on Windows, `libqwen3_tts.so` on Linux)
 
 ## Build from source (Windows)
 
@@ -45,6 +45,11 @@ pwsh -ExecutionPolicy Bypass -File .\scripts\build-native.ps1
 3. Run desktop app:
 ```powershell
 .\gradlew.bat :composeApp:run
+```
+
+4. Packaging:
+```powershell
+pwsh -ExecutionPolicy Bypass -File .\scripts\package-windows.ps1
 ```
 
 ## Build from source (Linux)
@@ -66,7 +71,14 @@ chmod +x gradlew
 ./gradlew :composeApp:run
 ```
 
-4. In `Setup`:
+4. Packaging:
+```bash
+chmod +x scripts/package-linux.sh
+./scripts/package-linux.sh
+```
+Standalone app will be in `composeApp/build/compose/binaries/main/app/qwen-tts-studio`.
+
+5. In `Setup`:
 - Select `Model Directory`.
 - Select `Model File Name` (detected `.gguf` list is provided).
 
