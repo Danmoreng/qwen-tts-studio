@@ -94,7 +94,11 @@ class QwenEngine {
             
             // Add build directory for development (root or subproject)
             candidates += File(userDir, "external/qwen3-tts-cpp/build")
-            userDir.parentFile?.let { candidates += File(it, "external/qwen3-tts-cpp/build") }
+            candidates += File(userDir, "external/build-linux")
+            userDir.parentFile?.let { 
+                candidates += File(it, "external/qwen3-tts-cpp/build") 
+                candidates += File(it, "external/build-linux")
+            }
 
             val jnaLibPath = System.getProperty("jna.library.path")
             if (!jnaLibPath.isNullOrBlank()) {
@@ -105,7 +109,7 @@ class QwenEngine {
             }
 
             val isWindows = System.getProperty("os.name").lowercase().contains("win")
-            val libName = if (isWindows) "qwen3_tts.dll" else "libqwen3_tts_jni.so"
+            val libName = if (isWindows) "qwen3_tts.dll" else "libqwen3_tts.so"
 
             return candidates.firstOrNull { File(it, libName).exists() }
                 ?: throw IllegalArgumentException(
@@ -190,7 +194,7 @@ class QwenEngine {
                     System.load(ggml.absolutePath)
                     println("[QwenEngine] Loaded dependency from root: ${ggml.name}")
 
-                    val mainLibName = if (isWindows) "qwen3_tts.dll" else "libqwen3_tts_jni.so"
+                    val mainLibName = if (isWindows) "qwen3_tts.dll" else "libqwen3_tts.so"
                     val dll = File(root, mainLibName)
                     System.load(dll.absolutePath)
                     isNativeLoaded = true

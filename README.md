@@ -47,6 +47,25 @@ pwsh -ExecutionPolicy Bypass -File .\scripts\build-native.ps1
 .\gradlew.bat :composeApp:run
 ```
 
+## Build from source (Linux)
+
+1. Clone with submodules:
+```bash
+git clone --recursive https://github.com/Danmoreng/qwen-tts-studio.git
+```
+
+2. Build native backend (CPU):
+```bash
+chmod +x scripts/build-native.sh
+./scripts/build-native.sh
+```
+
+3. Run desktop app:
+```bash
+chmod +x gradlew
+./gradlew :composeApp:run
+```
+
 4. In `Setup`:
 - Select `Model Directory`.
 - Select `Model File Name` (detected `.gguf` list is provided).
