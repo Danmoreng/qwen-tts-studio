@@ -45,6 +45,8 @@ compose.desktop {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "qwen-tts-studio"
             packageVersion = "1.0.0"
+
+            modules("java.base", "java.desktop", "java.logging", "java.naming", "java.sql", "jdk.unsupported", "jdk.security.auth")
         }
     }
 }
