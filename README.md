@@ -78,7 +78,7 @@ Configure application settings and models.
 
 - [Build Guide](docs/BUILD.md) - Detailed compilation and packaging instructions.
 - [Development Plan](docs/DEVELOPMENT_PLAN.md) - Project roadmap and implementation details.
-- [Native Backend](external/qwen3-tts-cpp/README.md) - Technical details about the C++ engine.
+- [Native Backend](https://github.com/Danmoreng/qwen3-tts.cpp) - Technical details about the high-performance C++ engine.
 
 ## License
 
