@@ -13,6 +13,15 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.Executors
 
+/**
+ * Represents a voice profile that can be used for synthesis.
+ *
+ * @property id Unique identifier for the voice preset.
+ * @property name Display name of the voice.
+ * @property referenceWav Optional path to a reference WAV file for cloning.
+ * @property speakerEmbeddingPath Optional path to an extracted speaker embedding file.
+ * @property embeddingDim The dimension of the speaker embedding, if known.
+ */
 data class VoicePreset(
     val id: String,
     val name: String,
@@ -20,9 +29,13 @@ data class VoicePreset(
     val speakerEmbeddingPath: String?,
     val embeddingDim: Int? = null
 ) {
+    /** Whether this is a built-in system voice (not a custom preset). */
     val isSystem: Boolean = referenceWav == null && speakerEmbeddingPath == null
 }
 
+/**
+ * ViewModel for managing custom voice presets and speaker embedding extraction.
+ */
 class VoicesViewModel : ViewModel() {
     private val defaultVoice = VoicePreset(
         id = "default",
@@ -37,14 +50,23 @@ class VoicesViewModel : ViewModel() {
     )
 
     private val _voices = MutableStateFlow(loadVoices())
+    /** List of all available voice presets, including the default system voice. */
     val voices: StateFlow<List<VoicePreset>> = _voices.asStateFlow()
+
     private val _isCreating = MutableStateFlow(false)
+    /** Whether a voice preset is currently being created (embedding extraction). */
     val isCreating: StateFlow<Boolean> = _isCreating.asStateFlow()
+
     private val _error = MutableStateFlow<String?>(null)
+    /** Current error message related to voice preset operations. */
     val error: StateFlow<String?> = _error.asStateFlow()
+
     private val _supportsCloning = MutableStateFlow(true)
+    /** Whether the currently loaded model supports voice cloning. */
     val supportsCloning: StateFlow<Boolean> = _supportsCloning.asStateFlow()
+
     private val _currentEmbeddingDim = MutableStateFlow(0)
+    /** The speaker embedding dimension required by the currently loaded model. */
     val currentEmbeddingDim: StateFlow<Int> = _currentEmbeddingDim.asStateFlow()
 
     private val qwenEngine = QwenEngine()
@@ -54,6 +76,12 @@ class VoicesViewModel : ViewModel() {
         }
     }.asCoroutineDispatcher()
 
+    /**
+     * Refreshes model capabilities to update cloning support and embedding dimensions.
+     *
+     * @param modelDir Directory containing the models.
+     * @param modelName Optional specific model name.
+     */
     fun refreshModelCapabilities(modelDir: String, modelName: String?) {
         if (modelDir.isBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
@@ -66,6 +94,14 @@ class VoicesViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Creates a new voice preset by extracting a speaker embedding from a reference WAV file.
+     *
+     * @param name The name for the new preset.
+     * @param referenceWav Path to the reference audio file.
+     * @param modelDir Directory containing the models (needed for extraction).
+     * @param modelName Optional specific model name.
+     */
     fun createVoicePreset(name: String, referenceWav: String, modelDir: String, modelName: String?) {
         val wavFile = File(referenceWav)
         if (!wavFile.exists() || !wavFile.isFile) {
@@ -141,6 +177,11 @@ class VoicesViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Deletes a custom voice preset.
+     *
+     * @param id The unique identifier of the preset to delete.
+     */
     fun deleteVoicePreset(id: String) {
         val target = _voices.value.firstOrNull { it.id == id } ?: return
         if (target.isSystem) return
@@ -149,10 +190,23 @@ class VoicesViewModel : ViewModel() {
         saveVoices()
     }
 
+    /**
+     * Returns the reference WAV path for a voice preset name.
+     *
+     * @param name The name of the voice preset.
+     * @return The path to the reference WAV file, or null if not found.
+     */
     fun referenceForVoice(name: String): String? {
         return _voices.value.firstOrNull { it.name == name }?.referenceWav
     }
 
+    /**
+     * Returns the speaker embedding path for a voice preset name, matching the expected dimension.
+     *
+     * @param name The name of the voice preset.
+     * @param expectedDim The required embedding dimension.
+     * @return The path to the embedding file, or null if not found or dimension mismatch.
+     */
     fun speakerEmbeddingForVoice(name: String, expectedDim: Int): String? {
         val preset = _voices.value.firstOrNull { it.name == name } ?: return null
         val embedding = preset.speakerEmbeddingPath ?: return null

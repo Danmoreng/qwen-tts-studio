@@ -64,6 +64,14 @@ import com.qwen.tts.studio.viewmodel.StudioViewModel
 import com.qwen.tts.studio.viewmodel.VoicesViewModel
 import io.github.vinceglb.filekit.compose.rememberFileSaverLauncher
 
+/**
+ * The main screen for audio synthesis.
+ * Provides controls for selecting models, languages, speakers, and entering text to be synthesized.
+ *
+ * @param viewModel The StudioViewModel managing the synthesis state and operations.
+ * @param settingsViewModel The SettingsViewModel for model configuration.
+ * @param voicesViewModel The VoicesViewModel for custom voice presets.
+ */
 @Composable
 fun StudioScreen(
     viewModel: StudioViewModel,

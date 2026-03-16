@@ -23,12 +23,28 @@ import com.qwen.tts.studio.viewmodel.StudioViewModel
 import com.qwen.tts.studio.viewmodel.VoicesViewModel
 import org.jetbrains.compose.ui.tooling.preview.Preview
 
+/**
+ * Enum representing the different screens in the application.
+ */
+/**
+ * Represents the main navigation screens in the application.
+ *
+ * @property label The display name for the screen in the navigation rail.
+ * @property icon The icon associated with the screen.
+ */
 enum class Screen(val label: String, val icon: ImageVector) {
     Studio("Studio", Icons.Default.VolumeUp),
     Voices("Voices", Icons.Default.Mic),
     Setup("Setup", Icons.Default.Settings)
 }
 
+/**
+ * The root composable function for the Qwen-TTS Studio application.
+ * It sets up the main layout, navigation rail, and theme management.
+ *
+ * @param isDarkMode Whether the application should be rendered in dark mode.
+ * @param onThemeToggle Callback invoked when the user toggles the theme.
+ */
 @Composable
 @Preview
 fun App(
@@ -111,6 +127,11 @@ fun App(
     }
 }
 
+/**
+ * Renders the top header for the currently selected screen.
+ *
+ * @param screen The active [Screen] determining the header's title.
+ */
 @Composable
 fun Header(screen: Screen) {
     Surface(

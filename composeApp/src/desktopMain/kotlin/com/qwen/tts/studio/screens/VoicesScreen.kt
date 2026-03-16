@@ -41,6 +41,13 @@ import io.github.vinceglb.filekit.compose.rememberFilePickerLauncher
 import io.github.vinceglb.filekit.core.PickerType
 import java.io.File
 
+/**
+ * Screen for creating and managing custom voice presets.
+ * Allows users to extract speaker embeddings from reference audio files.
+ *
+ * @param viewModel The VoicesViewModel for managing voice presets.
+ * @param settingsViewModel The SettingsViewModel for model configuration.
+ */
 @Composable
 fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewModel) {
     val voices by viewModel.voices.collectAsState()
