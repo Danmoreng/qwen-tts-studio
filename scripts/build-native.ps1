@@ -171,16 +171,29 @@ if ($Cuda) {
     $OptionalNativeFiles += $cudaBackend
 
     if ($env:CUDA_PATH) {
-        $cudaBin = Join-Path $env:CUDA_PATH "bin"
-        if (Test-Path $cudaBin) {
-            $cudaRuntimePatterns = @("cudart64_*.dll", "cublas64_*.dll", "cublasLt64_*.dll")
-            foreach ($pattern in $cudaRuntimePatterns) {
-                $dll = Get-ChildItem -Path $cudaBin -Filter $pattern -ErrorAction SilentlyContinue |
+        $cudaBinCandidates = @(
+            (Join-Path $env:CUDA_PATH "bin"),
+            (Join-Path $env:CUDA_PATH "bin\x64")
+        ) | Select-Object -Unique
+
+        $cudaRuntimePatterns = @("cudart64_*.dll", "cublas64_*.dll", "cublasLt64_*.dll")
+        foreach ($pattern in $cudaRuntimePatterns) {
+            $dll = $null
+            foreach ($cudaBin in $cudaBinCandidates) {
+                if (-not (Test-Path $cudaBin)) {
+                    continue
+                }
+
+                $dll = Get-ChildItem -Path $cudaBin -Filter $pattern -File -ErrorAction SilentlyContinue |
                     Sort-Object LastWriteTime -Descending |
                     Select-Object -First 1
                 if ($dll) {
-                    $OptionalNativeFiles += $dll.FullName
+                    break
                 }
+            }
+
+            if ($dll) {
+                $OptionalNativeFiles += $dll.FullName
             }
         }
     }
@@ -194,3 +207,4 @@ if ($CopyToRoot) {
 }
 
 Write-Host "Native build complete." -ForegroundColor Green
+

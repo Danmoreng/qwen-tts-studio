@@ -39,6 +39,11 @@ import androidx.compose.ui.unit.dp
 import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import io.github.vinceglb.filekit.compose.rememberDirectoryPickerLauncher
 
+/**
+ * Screen for configuring the application settings, such as model directory and file.
+ *
+ * @param viewModel The SettingsViewModel managing the configuration state.
+ */
 @Composable
 fun SetupScreen(viewModel: SettingsViewModel) {
     val modelDir by viewModel.modelDir.collectAsState()

@@ -1,0 +1,11 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/Development/qwen-tts-studio/external/build-ninja/cmake_install.cmake",
+		"C:/Development/qwen-tts-studio/external/build-ninja/qwen3-tts-cpp/cmake_install.cmake",
+		"C:/Development/qwen-tts-studio/external/build-ninja/qwen3-tts-cpp/ggml/cmake_install.cmake",
+		"C:/Development/qwen-tts-studio/external/build-ninja/qwen3-tts-cpp/ggml/src/cmake_install.cmake",
+		"C:/Development/qwen-tts-studio/external/build-ninja/qwen3-tts-cpp/ggml/src/ggml-cpu/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

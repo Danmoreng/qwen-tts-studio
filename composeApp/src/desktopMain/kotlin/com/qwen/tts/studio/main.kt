@@ -10,6 +10,10 @@ import java.awt.Color
 import java.awt.Window as AwtWindow
 import javax.swing.SwingUtilities
 
+/**
+ * The main entry point for the desktop application.
+ * Bootstraps the Compose window, sets up the window state, and applies platform-specific styling.
+ */
 fun main() = application {
     var isDarkMode by remember { mutableStateOf(true) }
     val windowState = rememberWindowState(width = 1440.dp, height = 920.dp)

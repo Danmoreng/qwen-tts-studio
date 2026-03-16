@@ -1,10 +1,10 @@
 # Qwen-TTS Studio Development Plan
 
-## Project goal
+## Project Goal
 
 Desktop-first local TTS workflow with a modern UI and native C++ inference backend.
 
-## Current implementation snapshot (March 2026)
+## Current Status
 
 ### Completed
 
@@ -13,31 +13,31 @@ Desktop-first local TTS workflow with a modern UI and native C++ inference backe
   - `Voices` (voice presets from reference audio)
   - `Setup` (model configuration)
 - Native bridge integration using JNI (`qwen3_tts.dll`).
-- Submodule backend now tracks `qwen3-tts.cpp` `main` after the architecture refactor, with:
-  - model-name aware loading
-  - named speaker API
-  - instruction + speaker plumbing in JNI/C/KMP layers
-- Capability-driven UI behavior (no fixed size switch):
-  - app detects model capabilities from loaded model metadata
-  - controls are shown/hidden based on detected capabilities
+- Submodule backend now tracks `qwen3-tts.cpp` after the architecture refactor, with:
+  - Model-name aware loading
+  - Named speaker API
+  - Instruction + speaker plumbing in JNI/C/KMP layers
+- Capability-driven UI behavior:
+  - App detects model capabilities from loaded model metadata
+  - Controls are shown/hidden based on detected capabilities
 - Model-family behavior currently used in practice:
   - `Base` models: custom voice cloning flow enabled
   - `CustomVoice` models: named speaker flow enabled
 - Studio behavior:
-  - model selector + language in first row
-  - speaker selector in second row for both model families
-  - first named speaker auto-selected when model requires named speakers
+  - Model selector + language in first row
+  - Speaker selector in second row for both model families
+  - First named speaker auto-selected when model requires named speakers
 - Voices behavior:
-  - voice extraction/presets enabled only when model supports cloning
-  - speaker presets remain embedding-dimension aware to avoid mismatched reuse
+  - Voice extraction/presets enabled only when model supports cloning
+  - Speaker presets remain embedding-dimension aware to avoid mismatched reuse
 
-### In progress / rough edges
+### In Progress / Known Issues
 
 - Packaging and onboarding are still developer-oriented.
 - Runtime and model validation UX can be improved (clearer diagnostics in Setup).
 - Linux path and runtime validation is not yet fully documented/tested.
 
-## Feature matrix
+## Feature Matrix
 
 | Feature | Base model family | CustomVoice model family |
 |---|---|---|
@@ -46,7 +46,7 @@ Desktop-first local TTS workflow with a modern UI and native C++ inference backe
 | Instruction/style prompt | No (current Base models) | Yes (when capability is present) |
 | Named speaker dropdown | No (current Base models) | Yes |
 
-## Build and run workflow (Windows)
+## Build and Run Workflow (Quick Start)
 
 1. Build native backend:
 ```powershell
@@ -62,19 +62,19 @@ pwsh -ExecutionPolicy Bypass -File .\scripts\build-native.ps1
 - Setup `Model Directory`
 - Pick `Model File Name` (the app derives behavior from model capabilities/family)
 
-## Next milestones
+## Next Milestones
 
 1. Improve Setup validation:
-- detect missing model files and show exact required filenames/dependencies per selected model.
+- Detect missing model files and show exact required filenames/dependencies per selected model.
 
 2. Better generation diagnostics:
-- surface backend errors with actionable hints (bad model dir, missing tokenizer/vocoder, etc.).
+- Surface backend errors with actionable hints (bad model dir, missing tokenizer/vocoder, etc.).
 
 3. Speaker UX polish (named-speaker models):
-- optional refresh button and loading state for speaker list retrieval.
+- Optional refresh button and loading state for speaker list retrieval.
 
 4. Hybrid-capability model support:
-- support models that expose both named speakers/instruction and cloning in one checkpoint, with explicit UI precedence rules.
+- Support models that expose both named speakers/instruction and cloning in one checkpoint, with explicit UI precedence rules.
 
 5. Distribution:
-- stable Windows package flow (CPU and CUDA variants).
+- Stable Windows package flow (CPU and CUDA variants).

@@ -1,0 +1,25 @@
+typedef char __nv_bool;
+#line 188 "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\include\\vcruntime.h"
+typedef unsigned long long size_t;
+#include "crt/device_runtime.h"
+#if !defined(__CUDABE__)
+#endif
+#if !defined(__CUDABE__)
+#endif
+#if !defined(__CUDABE__)
+#endif
+#if !defined(__CUDABE__)
+#endif
+#if !defined(__CUDABE__)
+#endif
+#include "common_functions.h"
+#if !defined(__CUDABE__)
+#endif
+#if !defined(__CUDABE__)
+#endif
+#if !defined(__CUDABE__)
+#endif
+#if !defined(__CUDABE__)
+#endif
+#if !defined(__CUDABE__)
+#endif

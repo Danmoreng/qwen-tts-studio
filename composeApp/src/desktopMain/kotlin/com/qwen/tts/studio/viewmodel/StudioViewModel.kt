@@ -22,6 +22,27 @@ import javax.sound.sampled.DataLine
 import javax.sound.sampled.Mixer
 import javax.sound.sampled.SourceDataLine
 
+/**
+ * UI state for the Studio screen.
+ *
+ * @property text The current text to be synthesized.
+ * @property selectedVoice The currently selected voice profile or model name.
+ * @property availableSpeakers List of speaker names available in the current model.
+ * @property selectedSpeaker The currently selected speaker name.
+ * @property supportsCloning Whether the current model supports voice cloning.
+ * @property supportsNamedSpeakers Whether the current model supports selecting speakers by name.
+ * @property supportsInstruction Whether the current model supports text instructions.
+ * @property speakerEmbeddingDim The dimension of speaker embeddings for the current model.
+ * @property modelKind The kind of model currently loaded.
+ * @property selectedLanguage The currently selected language for synthesis.
+ * @property selectedInstruction The current instruction text for the model.
+ * @property isGenerating Whether an audio generation process is currently active.
+ * @property isPlaying Whether audio is currently being played.
+ * @property isSaving Whether the generated audio is currently being saved to a file.
+ * @property hasAudio Whether there is generated audio available to play or save.
+ * @property progress Generation progress (0.0 to 1.0).
+ * @property error Current error message, if any.
+ */
 data class StudioUiState(
     val text: String = "Another test bites the dust.",
     val selectedVoice: String = "Default Voice (Model)",
@@ -42,8 +63,12 @@ data class StudioUiState(
     val error: String? = null
 )
 
+/**
+ * ViewModel for the Studio screen, managing audio generation, playback, and state.
+ */
 class StudioViewModel : ViewModel() {
     private val _uiState = MutableStateFlow(StudioUiState())
+    /** The current UI state as a StateFlow. */
     val uiState: StateFlow<StudioUiState> = _uiState.asStateFlow()
 
     private val qwenEngine = QwenEngine()
@@ -54,24 +79,49 @@ class StudioViewModel : ViewModel() {
         }
     }.asCoroutineDispatcher()
 
+    /**
+     * Updates the text to be synthesized.
+     *
+     * @param newText The new text.
+     */
     fun onTextChange(newText: String) {
         if (newText.length <= 5000) {
             _uiState.update { it.copy(text = newText, error = null) }
         }
     }
 
+    /**
+     * Updates the selected voice.
+     *
+     * @param newVoice The new voice name.
+     */
     fun onVoiceChange(newVoice: String) {
         _uiState.update { it.copy(selectedVoice = newVoice) }
     }
 
+    /**
+     * Updates the selected speaker.
+     *
+     * @param newSpeaker The new speaker name.
+     */
     fun onSpeakerChange(newSpeaker: String) {
         _uiState.update { it.copy(selectedSpeaker = newSpeaker) }
     }
 
+    /**
+     * Updates the selected language.
+     *
+     * @param newLanguage The new language name.
+     */
     fun onLanguageChange(newLanguage: String) {
         _uiState.update { it.copy(selectedLanguage = newLanguage) }
     }
 
+    /**
+     * Updates the selected instruction.
+     *
+     * @param newInstruction The new instruction text.
+     */
     fun onInstructionChange(newInstruction: String) {
         _uiState.update { it.copy(selectedInstruction = newInstruction) }
     }
@@ -103,6 +153,14 @@ class StudioViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Generates audio using the current UI state and provided model/speaker information.
+     *
+     * @param modelDir Directory containing the models.
+     * @param modelName Optional specific model name.
+     * @param speakerEmbeddingPath Optional path to a speaker embedding file.
+     * @param referenceWav Optional path to a reference WAV file for cloning.
+     */
     fun generateAudio(
         modelDir: String,
         modelName: String?,
@@ -183,6 +241,12 @@ class StudioViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Refreshes the model capabilities from the current engine state.
+     *
+     * @param modelDir Directory containing the models.
+     * @param modelName Optional specific model name.
+     */
     fun refreshModelCapabilities(modelDir: String, modelName: String?) {
         if (modelDir.isBlank() || _uiState.value.isGenerating) return
         viewModelScope.launch(Dispatchers.IO) {
@@ -200,12 +264,20 @@ class StudioViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Replays the last generated audio.
+     */
     fun replayLastAudio() {
         val audio = lastGeneratedAudio ?: return
         if (_uiState.value.isPlaying) return
         playAudio(audio)
     }
 
+    /**
+     * Saves the last generated audio to a WAV file.
+     *
+     * @param file The file to save to.
+     */
     fun saveAudioToFile(file: File) {
         val samples = lastGeneratedAudio ?: return
         viewModelScope.launch(Dispatchers.IO) {

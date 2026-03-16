@@ -6,6 +6,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import java.util.Properties
 
+/**
+ * ViewModel for managing application settings, specifically model paths and variants.
+ * Handles persistence of settings using a properties file in the user's home directory.
+ */
 class SettingsViewModel : ViewModel() {
     private val appDir = File(System.getProperty("user.home"), ".qwen-tts-studio")
     private val settingsFile = File(appDir, "settings.properties")
@@ -13,12 +17,15 @@ class SettingsViewModel : ViewModel() {
     private val defaultModelName = "qwen3-tts-0.6b-f16.gguf"
 
     private val _modelDir = MutableStateFlow(loadModelDir())
+    /** The directory where Qwen3 models are stored. */
     val modelDir = _modelDir.asStateFlow()
 
     private val _modelName = MutableStateFlow(loadModelName())
+    /** The currently selected model filename. */
     val modelName = _modelName.asStateFlow()
 
     private val _availableModelNames = MutableStateFlow(scanModelNames(_modelDir.value))
+    /** List of available model filenames found in the current model directory. */
     val availableModelNames = _availableModelNames.asStateFlow()
 
     init {
@@ -97,6 +104,11 @@ class SettingsViewModel : ViewModel() {
         }
     }
 
+    /**
+     * Updates the model directory and rescans for available models.
+     *
+     * @param path The new model directory path.
+     */
     fun setModelDir(path: String) {
         _modelDir.value = path
         _availableModelNames.value = scanModelNames(path)
@@ -107,11 +119,19 @@ class SettingsViewModel : ViewModel() {
         saveAll()
     }
 
+    /**
+     * Updates the selected model filename.
+     *
+     * @param name The new model filename.
+     */
     fun setModelName(name: String) {
         _modelName.value = name.trim()
         saveAll()
     }
 
+    /**
+     * Rescans the current model directory for available models.
+     */
     fun refreshModelNames() {
         _availableModelNames.value = scanModelNames(_modelDir.value)
         if (_modelName.value.isBlank()) {
@@ -120,3 +140,4 @@ class SettingsViewModel : ViewModel() {
         }
     }
 }
+

@@ -6,6 +6,7 @@ import javax.sound.sampled.AudioSystem
 
 /**
  * High-level wrapper for the Qwen3 Engine using JNI.
+ * This class handles native library loading, model initialization, and audio synthesis.
  */
 class QwenEngine {
     private var nativePtr: Long = 0
@@ -14,7 +15,14 @@ class QwenEngine {
     private var useCliFallback = false
 
     /**
-     * Data class matching JNI constructor in qwen3_tts_jni.cpp
+     * Data class matching JNI constructor in qwen3_tts_jni.cpp.
+     * Contains the result of a synthesis operation.
+     *
+     * @property audio The synthesized audio samples as a FloatArray (PCM).
+     * @property sampleRate The sample rate of the generated audio.
+     * @property success Whether the synthesis was successful.
+     * @property errorMsg An error message if the synthesis failed.
+     * @property timeMs The time taken for synthesis in milliseconds.
      */
     data class NativeResult(
         val audio: FloatArray?,
@@ -24,6 +32,18 @@ class QwenEngine {
         val timeMs: Long
     )
 
+    /**
+     * Parameters for the synthesis operation.
+     *
+     * @property languageId The ID of the language to use for synthesis.
+     * @property instruction Optional instruction or prompt for the model.
+     * @property speaker Optional name of the speaker to use (for models with named speakers).
+     * @property maxAudioTokens Maximum number of audio tokens to generate.
+     * @property temperature Sampling temperature (higher is more random).
+     * @property topP Top-P (nucleus) sampling threshold.
+     * @property topK Top-K sampling threshold.
+     * @property threads Number of threads to use for synthesis.
+     */
     data class NativeParams(
         val languageId: Int = 2050, // Default to English
         val instruction: String? = null,
@@ -35,6 +55,17 @@ class QwenEngine {
         val threads: Int = 4
     )
 
+    /**
+     * Capabilities of the currently loaded model.
+     *
+     * @property loaded Whether a model is currently loaded.
+     * @property supportsCloning Whether the model supports voice cloning via reference audio.
+     * @property supportsNamedSpeakers Whether the model supports selecting speakers by name.
+     * @property supportsInstruction Whether the model supports text instructions.
+     * @property speakerEmbeddingDim The dimension of the speaker embeddings.
+     * @property modelKind The kind of model (Base, CustomVoice, etc.).
+     * @property speakerCount The number of built-in speakers in the model.
+     */
     data class NativeCapabilities(
         val loaded: Boolean,
         val supportsCloning: Boolean,
@@ -46,14 +77,24 @@ class QwenEngine {
     )
 
     companion object {
+        /** Unknown model kind. */
         const val MODEL_KIND_UNKNOWN = 0
+        /** Base model kind, typically supports cloning. */
         const val MODEL_KIND_BASE = 1
+        /** Custom voice model kind, typically supports named speakers. */
         const val MODEL_KIND_CUSTOM_VOICE = 2
+        /** Voice design model kind. */
         const val MODEL_KIND_VOICE_DESIGN = 3
 
         private var isNativeLoaded = false
         private val loadLock = Any()
 
+        /**
+         * Maps a language code or name to its corresponding ID used by the engine.
+         *
+         * @param lang The language code (e.g., "en", "zh") or name.
+         * @return The language ID.
+         */
         fun mapLanguageToId(lang: String): Int {
             return when (lang.lowercase()) {
                 "en", "english" -> 2050
@@ -70,6 +111,12 @@ class QwenEngine {
             }
         }
 
+        /**
+         * Maps a language ID back to its 2-letter ISO language code.
+         *
+         * @param id The language ID.
+         * @return The 2-letter language code.
+         */
         fun mapIdToLanguageCode(id: Int): String {
             return when (id) {
                 2050 -> "en"
@@ -235,6 +282,13 @@ class QwenEngine {
     private external fun nativeGetAvailableSpeakers(ptr: Long): String?
     private external fun nativeGetModelCapabilities(ptr: Long): NativeCapabilities?
 
+    /**
+     * Loads the engine and models from the specified directory.
+     *
+     * @param modelDir Path to the directory containing model files.
+     * @param modelName Optional specific model name or prefix.
+     * @return true if the engine was loaded successfully (either natively or via CLI fallback).
+     */
     fun load(modelDir: String, modelName: String? = null): Boolean {
         if (!File(modelDir).exists() || !File(modelDir).isDirectory) return false
 
@@ -276,6 +330,17 @@ class QwenEngine {
         }
     }
 
+    /**
+     * Generates audio from the given text.
+     *
+     * @param text The text to synthesize.
+     * @param referenceWav Optional path to a reference WAV file for voice cloning.
+     * @param speakerEmbeddingPath Optional path to a pre-extracted speaker embedding file.
+     * @param languageId The language ID to use (default is English).
+     * @param instruction Optional text instruction for the model.
+     * @param speaker Optional speaker name.
+     * @return A FloatArray containing the synthesized audio samples, or null if synthesis failed.
+     */
     fun generate(
         text: String,
         referenceWav: String? = null,
@@ -307,6 +372,9 @@ class QwenEngine {
         }
     }
 
+    /**
+     * Releases native resources. Should be called when the engine is no longer needed.
+     */
     fun release() {
         if (nativePtr != 0L) {
             nativeFree(nativePtr)
@@ -314,6 +382,11 @@ class QwenEngine {
         }
     }
 
+    /**
+     * Returns a list of available built-in speakers for the currently loaded model.
+     *
+     * @return A list of speaker names.
+     */
     fun getAvailableSpeakers(): List<String> {
         if (useCliFallback || nativePtr == 0L) return emptyList()
         return try {
@@ -330,6 +403,11 @@ class QwenEngine {
         }
     }
 
+    /**
+     * Gets the capabilities of the currently loaded model.
+     *
+     * @return A NativeCapabilities object, or null if no model is loaded.
+     */
     fun getModelCapabilities(): NativeCapabilities? {
         if (useCliFallback) {
             return inferCapabilitiesFromModelName(loadedModelName)
@@ -343,6 +421,13 @@ class QwenEngine {
         }
     }
 
+    /**
+     * Extracts a speaker embedding from a reference WAV file.
+     *
+     * @param referenceWav Path to the reference WAV file.
+     * @param outputPath Path where the extracted embedding should be saved.
+     * @return true if the extraction was successful.
+     */
     fun extractSpeakerEmbedding(referenceWav: String, outputPath: String): Boolean {
         if (referenceWav.isBlank() || outputPath.isBlank()) return false
 

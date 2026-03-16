@@ -12,20 +12,32 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $ComposeAppDir = Join-Path $RepoRoot "composeApp"
 $GradleWrapper = Join-Path $RepoRoot "gradlew.bat"
 
-function Test-JavaHome([string]$JavaHomePath) {
+function Test-JavaHome([string]$JavaHomePath, [switch]$RequireJPackage) {
     if ([string]::IsNullOrWhiteSpace($JavaHomePath)) { return $false }
-    return (Test-Path (Join-Path $JavaHomePath "bin\java.exe"))
+
+    $required = @("bin\java.exe")
+    if ($RequireJPackage) {
+        $required += "bin\jpackage.exe"
+    }
+
+    foreach ($relativePath in $required) {
+        if (-not (Test-Path (Join-Path $JavaHomePath $relativePath))) {
+            return $false
+        }
+    }
+
+    return $true
 }
 
-function Resolve-JavaHome {
-    if (Test-JavaHome $env:JAVA_HOME) {
+function Resolve-JavaHome([switch]$RequireJPackage) {
+    if (Test-JavaHome $env:JAVA_HOME -RequireJPackage:$RequireJPackage) {
         return $env:JAVA_HOME
     }
 
     $javaCmd = Get-Command java -ErrorAction SilentlyContinue
     if ($javaCmd -and $javaCmd.Path) {
         $javaHome = Split-Path -Parent (Split-Path -Parent $javaCmd.Path)
-        if (Test-JavaHome $javaHome) {
+        if (Test-JavaHome $javaHome -RequireJPackage:$RequireJPackage) {
             return $javaHome
         }
     }
@@ -42,7 +54,7 @@ function Resolve-JavaHome {
     $gradleJdks = Join-Path $userProfile ".gradle\jdks"
     if (Test-Path $gradleJdks) {
         $latestGradleJdk = Get-ChildItem $gradleJdks -Directory -ErrorAction SilentlyContinue |
-            Where-Object { Test-JavaHome $_.FullName } |
+            Where-Object { Test-JavaHome $_.FullName -RequireJPackage:$RequireJPackage } |
             Sort-Object LastWriteTime -Descending |
             Select-Object -First 1
         if ($latestGradleJdk) {
@@ -51,7 +63,7 @@ function Resolve-JavaHome {
     }
 
     foreach ($candidate in $candidates) {
-        if (Test-JavaHome $candidate) {
+        if (Test-JavaHome $candidate -RequireJPackage:$RequireJPackage) {
             return $candidate
         }
     }
@@ -85,11 +97,11 @@ if (-not (Test-Path $GradleWrapper)) {
     throw "gradlew.bat not found at $GradleWrapper"
 }
 
-$ResolvedJavaHome = Resolve-JavaHome
+$ResolvedJavaHome = Resolve-JavaHome -RequireJPackage
 if (-not $ResolvedJavaHome) {
     throw @"
-No Java runtime found for Gradle.
-Set JAVA_HOME manually, or install Android Studio / IntelliJ (JBR), then retry.
+No Java runtime with jpackage found for Gradle packaging.
+Set JAVA_HOME manually to a full JDK/JBR, or install Android Studio / IntelliJ (JBR), then retry.
 "@
 }
 
@@ -119,9 +131,31 @@ if (-not (Test-Path $AppRoot)) {
 }
 
 $NativeDlls = @("qwen3_tts.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll")
-if (Test-Path (Join-Path $RepoRoot "ggml-cuda.dll")) {
+if ($Cuda) {
+    $cudaBackend = Join-Path $RepoRoot "ggml-cuda.dll"
+    if (-not (Test-Path $cudaBackend)) {
+        throw "CUDA packaging requested, but missing backend DLL: $cudaBackend"
+    }
+
     $NativeDlls += "ggml-cuda.dll"
+
+    $cudaRuntimeCopied = $false
+    $cudaRuntimePatterns = @("cudart64_*.dll", "cublas64_*.dll", "cublasLt64_*.dll")
+    foreach ($pattern in $cudaRuntimePatterns) {
+        $runtimeDll = Get-ChildItem -Path $RepoRoot -Filter $pattern -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+        if ($runtimeDll) {
+            $NativeDlls += $runtimeDll.Name
+            $cudaRuntimeCopied = $true
+        }
+    }
+
+    if (-not $cudaRuntimeCopied) {
+        Write-Warning "CUDA packaging was requested, but CUDA runtime DLLs were not found in the repo root. The packaged app may require a local CUDA installation on the target machine."
+    }
 }
+$NativeDlls = $NativeDlls | Select-Object -Unique
 Write-Host "Step 3/3: Copy native DLLs into packaged app..." -ForegroundColor Cyan
 foreach ($dll in $NativeDlls) {
     $src = Join-Path $RepoRoot $dll
