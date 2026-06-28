@@ -1,4 +1,5 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
 import org.gradle.api.tasks.JavaExec
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
@@ -66,6 +67,20 @@ compose.desktop {
             packageVersion = providers.environmentVariable("APP_VERSION").orElse("1.0.0").get()
 
             modules("java.base", "java.desktop", "java.logging", "java.naming", "java.net.http", "java.sql", "jdk.unsupported", "jdk.security.auth")
+
+            windows {
+                iconFile.set(project.file("src/desktopMain/resources/icons/app-icon.ico"))
+            }
+
+            linux {
+                iconFile.set(project.file("src/desktopMain/resources/icons/app-icon.png"))
+            }
         }
+    }
+}
+
+tasks.withType<AbstractJPackageTask>().configureEach {
+    if (name == "createDistributable" && System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+        iconFile.set(project.file("src/desktopMain/resources/icons/app-icon.ico"))
     }
 }
