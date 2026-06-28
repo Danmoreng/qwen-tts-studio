@@ -16,12 +16,27 @@ Qwen-TTS Studio is a modern desktop application for high-quality, local text-to-
 
 ## Quick Start
 
-### 1. Prerequisites
+### Download for Windows
+
+Pre-built Windows releases are available on the
+[GitHub Releases page](https://github.com/Danmoreng/qwen-tts-studio/releases).
+You can download either an MSI installer or a portable ZIP package and run the
+app without building it yourself.
+
+The CUDA release variants include the native backend. Choose the smaller
+`windows-cuda-system` package if you already have the NVIDIA CUDA runtime
+installed, or the larger `windows-cuda-bundled` package for an offline package
+that includes the required CUDA runtime DLLs.
+
+### 1. Build Prerequisites
+
+These are only required when building from source.
+
 - **Windows:** Visual Studio 2022 Build Tools, CMake, and a Java 21+ JDK.
 - **Linux:** GCC/Clang, CMake, and a Java 21+ JDK.
 - **NVIDIA GPU (Optional):** CUDA Toolkit for hardware acceleration.
 
-### 2. Installation
+### 2. Build from Source
 
 ```bash
 # Clone the repository with submodules
