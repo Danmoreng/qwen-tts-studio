@@ -91,6 +91,11 @@ This bundles the NVIDIA CUDA runtime DLLs into the app image. It is more portabl
 
 The outputs will be available in `composeApp/build/compose/binaries/main/`.
 
+GitHub releases publish both variants:
+
+- `windows-cuda-system`: smaller ZIP/MSI with `ggml-cuda.dll`, requiring CUDA runtime DLLs from a local CUDA installation.
+- `windows-cuda-bundled`: larger ZIP/MSI with NVIDIA CUDA runtime DLLs included.
+
 ### Linux
 
 **Create Standalone App:**

@@ -57,7 +57,10 @@ For detailed build instructions, including CUDA support and packaging, see [docs
 .\scripts\package-windows.ps1 -Cuda -UseNinja -BuildMsi -BundleCudaRuntime
 ```
 
-Tagged pushes matching `v*` and manual dispatches run `.github/workflows/windows-release.yml`, producing a CUDA-capable portable ZIP and MSI release. The standard release includes the CUDA backend but expects CUDA runtime DLLs from a local CUDA installation.
+Tagged pushes matching `v*` and manual dispatches run `.github/workflows/windows-release.yml`, producing two Windows ZIP/MSI variants:
+
+- `windows-cuda-system`: smaller package. Includes the CUDA backend, but expects NVIDIA CUDA runtime DLLs from a local CUDA installation. It falls back to CPU when CUDA is unavailable.
+- `windows-cuda-bundled`: larger offline package. Includes NVIDIA CUDA runtime DLLs so CUDA works without a separate CUDA Toolkit installation.
 
 ### 3. Model Setup
 

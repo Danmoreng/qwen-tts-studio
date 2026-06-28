@@ -97,17 +97,28 @@ jobs:
           $cudaBin | Out-File -FilePath $env:GITHUB_PATH -Append
           & (Join-Path $cudaBin "nvcc.exe") --version
 
-      - name: Package ZIP and MSI
+      - name: Package lean ZIP and MSI
         shell: pwsh
         run: |
           .\scripts\package-windows.ps1 -Cuda -UseNinja -BuildMsi -RequireMsi -Clean
 
-      - name: Collect artifacts
+      - name: Collect lean artifacts
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path artifacts -Force | Out-Null
-          Copy-Item composeApp\build\compose\binaries\main\portable\*.zip artifacts\
-          Copy-Item composeApp\build\compose\binaries\main\msi\*.msi artifacts\
+          Copy-Item composeApp\build\compose\binaries\main\portable\qwen-tts-studio-windows-portable.zip artifacts\qwen-tts-studio-${{ env.RELEASE_VERSION }}-windows-cuda-system.zip
+          Copy-Item composeApp\build\compose\binaries\main\msi\qwen-tts-studio-*.msi artifacts\qwen-tts-studio-${{ env.RELEASE_VERSION }}-windows-cuda-system.msi
+
+      - name: Package CUDA bundled ZIP and MSI
+        shell: pwsh
+        run: |
+          .\scripts\package-windows.ps1 -Cuda -UseNinja -SkipNativeBuild -BuildMsi -RequireMsi -BundleCudaRuntime
+
+      - name: Collect CUDA bundled artifacts
+        shell: pwsh
+        run: |
+          Copy-Item composeApp\build\compose\binaries\main\portable\qwen-tts-studio-windows-portable.zip artifacts\qwen-tts-studio-${{ env.RELEASE_VERSION }}-windows-cuda-bundled.zip
+          Copy-Item composeApp\build\compose\binaries\main\msi\qwen-tts-studio-*.msi artifacts\qwen-tts-studio-${{ env.RELEASE_VERSION }}-windows-cuda-bundled.msi
           Get-ChildItem artifacts
 
       - name: Upload workflow artifacts
@@ -122,5 +133,10 @@ jobs:
           tag_name: v${{ env.RELEASE_VERSION }}
           target_commitish: ${{ github.sha }}
           name: Qwen-TTS Studio ${{ env.RELEASE_VERSION }}
+          body: |
+            Windows downloads:
+
+            - `windows-cuda-system`: smaller package. Includes the CUDA backend, but requires NVIDIA CUDA runtime DLLs from a local CUDA installation (`CUDA_PATH`, `CUDAToolkit_ROOT`, or `PATH`). Falls back to CPU if CUDA is unavailable.
+            - `windows-cuda-bundled`: larger offline package. Includes NVIDIA CUDA runtime DLLs, so CUDA works without a separate CUDA Toolkit installation.
           prerelease: ${{ inputs.prerelease || false }}
           files: artifacts/*
