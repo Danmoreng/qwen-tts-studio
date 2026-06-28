@@ -2,6 +2,7 @@ package com.qwen.tts.studio.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.qwen.tts.studio.engine.NativeBackendPreference
 import com.qwen.tts.studio.engine.QwenEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -130,11 +131,15 @@ class VoicesViewModel : ViewModel() {
      * @param modelDir Directory containing the models.
      * @param modelName Optional specific model name.
      */
-    fun refreshModelCapabilities(modelDir: String, modelName: String?) {
+    fun refreshModelCapabilities(
+        modelDir: String,
+        modelName: String?,
+        backendPreference: NativeBackendPreference
+    ) {
         if (modelDir.isBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
             val resolvedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
-            val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, resolvedModelName) }
+            val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, resolvedModelName, backendPreference) }
             if (!loaded) return@launch
             val caps = withContext(nativeDispatcher) { qwenEngine.getModelCapabilities() }
             _supportsCloning.value = caps?.supportsCloning ?: true
@@ -150,7 +155,13 @@ class VoicesViewModel : ViewModel() {
      * @param modelDir Directory containing the models (needed for extraction).
      * @param modelName Optional specific model name.
      */
-    fun createVoicePreset(name: String, referenceWav: String, modelDir: String, modelName: String?) {
+    fun createVoicePreset(
+        name: String,
+        referenceWav: String,
+        modelDir: String,
+        modelName: String?,
+        backendPreference: NativeBackendPreference
+    ) {
         val wavFile = File(referenceWav)
         if (!wavFile.exists() || !wavFile.isFile) {
             _error.value = "Reference audio file does not exist."
@@ -191,7 +202,7 @@ class VoicesViewModel : ViewModel() {
                         continue
                     }
 
-                    val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, targetModel) }
+                    val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, targetModel, backendPreference) }
                     if (!loaded) {
                         deleteEmbeddingFiles(extractedEmbeddings.values)
                         _error.value = "Failed to load $targetModel for speaker embedding extraction."
@@ -244,7 +255,12 @@ class VoicesViewModel : ViewModel() {
         }
     }
 
-    fun createMissingSpeakerEmbedding(name: String, targetDim: Int, modelDir: String) {
+    fun createMissingSpeakerEmbedding(
+        name: String,
+        targetDim: Int,
+        modelDir: String,
+        backendPreference: NativeBackendPreference
+    ) {
         if (_isCreating.value) return
         if (targetDim <= 0) {
             _error.value = "Unknown speaker embedding dimension."
@@ -292,7 +308,7 @@ class VoicesViewModel : ViewModel() {
                 var extracted = false
                 var lastError: String? = null
                 for (targetModel in targetModels) {
-                    val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, targetModel) }
+                    val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, targetModel, backendPreference) }
                     if (!loaded) {
                         lastError = "Failed to load $targetModel."
                         continue
@@ -1183,6 +1199,12 @@ class VoicesViewModel : ViewModel() {
             i += 2
         }
         return PcmStats(peak, squareSum, sampleCount, clippedSamples)
+    }
+
+    fun releaseEngine() {
+        viewModelScope.launch(nativeDispatcher) {
+            qwenEngine.release()
+        }
     }
 
     override fun onCleared() {

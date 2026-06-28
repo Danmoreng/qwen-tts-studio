@@ -46,6 +46,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.qwen.tts.studio.viewmodel.ModelDownloadOption
+import com.qwen.tts.studio.engine.NativeBackendPreference
+import com.qwen.tts.studio.engine.QwenEngine
 import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import io.github.vinceglb.filekit.compose.rememberDirectoryPickerLauncher
 import java.awt.Desktop
@@ -146,6 +148,8 @@ fun SetupScreen(viewModel: SettingsViewModel) {
 
                     ModelDirectorySection(viewModel)
 
+                    BackendSection(viewModel)
+
                     HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
 
                     Text(
@@ -198,6 +202,42 @@ private fun ModelDirectorySection(viewModel: SettingsViewModel) {
                 Text("Browse")
             }
         }
+    }
+}
+
+@Composable
+private fun BackendSection(viewModel: SettingsViewModel) {
+    val backendPreference by viewModel.backendPreference.collectAsState()
+    val compiledBackendMask by viewModel.compiledBackendMask.collectAsState()
+    val cudaEnabled = compiledBackendMask and QwenEngine.BACKEND_CUDA != 0
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Native Backend", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NativeBackendPreference.entries.forEach { preference ->
+                val enabled = preference != NativeBackendPreference.Cuda || cudaEnabled
+                val selected = backendPreference == preference
+                val onClick = { viewModel.setBackendPreference(preference) }
+                if (selected) {
+                    Button(onClick = onClick, enabled = enabled) {
+                        Text(preference.label)
+                    }
+                } else {
+                    OutlinedButton(onClick = onClick, enabled = enabled) {
+                        Text(preference.label)
+                    }
+                }
+            }
+        }
+        Text(
+            if (cudaEnabled) {
+                "CUDA backend is available in this native build."
+            } else {
+                "CUDA backend is not available in this native build."
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+        )
     }
 }
 

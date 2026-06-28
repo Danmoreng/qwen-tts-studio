@@ -62,6 +62,12 @@ fun App(
     val studioViewModel: StudioViewModel = viewModel { StudioViewModel() }
     val voicesViewModel: VoicesViewModel = viewModel { VoicesViewModel() }
     val showWelcome by settingsViewModel.showWelcome.collectAsState()
+    val backendPreference by settingsViewModel.backendPreference.collectAsState()
+
+    LaunchedEffect(backendPreference) {
+        studioViewModel.releaseEngine()
+        voicesViewModel.releaseEngine()
+    }
 
     AppTheme(darkTheme = isDarkMode) {
         Surface(

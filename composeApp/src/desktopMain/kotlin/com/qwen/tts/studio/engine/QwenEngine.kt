@@ -4,6 +4,17 @@ import java.io.File
 import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioSystem
 
+enum class NativeBackendPreference(val id: String, val label: String) {
+    Auto("auto", "Auto"),
+    Cpu("cpu", "CPU"),
+    Cuda("cuda", "CUDA");
+
+    companion object {
+        fun fromId(id: String?): NativeBackendPreference =
+            entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: Auto
+    }
+}
+
 /**
  * High-level wrapper for the Qwen3 Engine using JNI.
  * This class handles native library loading, model initialization, and audio synthesis.
@@ -119,6 +130,10 @@ class QwenEngine {
         const val MODEL_KIND_CUSTOM_VOICE = 2
         /** Voice design model kind. */
         const val MODEL_KIND_VOICE_DESIGN = 3
+
+        const val BACKEND_AUTO = 0
+        const val BACKEND_CPU = 1
+        const val BACKEND_CUDA = 2
 
         private var isNativeLoaded = false
         private val loadLock = Any()
@@ -368,6 +383,9 @@ class QwenEngine {
     private external fun nativeInit(): Long
     private external fun nativeFree(ptr: Long)
     private external fun nativeLoadModels(ptr: Long, modelDir: String, modelName: String?): Boolean
+    private external fun nativeSetBackendPreference(preference: Int): Boolean
+    private external fun nativeGetCompiledBackendMask(): Int
+    private external fun nativeGetActiveBackendName(): String?
     private external fun nativeSynthesize(
         ptr: Long,
         text: String,
@@ -397,7 +415,11 @@ class QwenEngine {
      * @param modelName Optional specific model name or prefix.
      * @return true if the engine was loaded successfully (either natively or via CLI fallback).
      */
-    fun load(modelDir: String, modelName: String? = null): Boolean {
+    fun load(
+        modelDir: String,
+        modelName: String? = null,
+        backendPreference: NativeBackendPreference = NativeBackendPreference.Auto
+    ): Boolean {
         if (!File(modelDir).exists() || !File(modelDir).isDirectory) return false
 
         release()
@@ -414,10 +436,16 @@ class QwenEngine {
         }
 
         return try {
+            if (!nativeSetBackendPreference(backendPreference.nativeValue())) {
+                throw IllegalStateException("Failed to select native backend: ${backendPreference.label}")
+            }
             nativePtr = nativeInit()
             if (nativePtr != 0L) {
                 val ok = nativeLoadModels(nativePtr, modelDir, modelName)
                 if (ok) {
+                    nativeGetActiveBackendName()?.takeIf { it.isNotBlank() }?.let {
+                        println("[QwenEngine] Active backend: $it")
+                    }
                     true
                 } else {
                     release()
@@ -561,6 +589,17 @@ class QwenEngine {
             nativeFree(nativePtr)
             nativePtr = 0L
         }
+    }
+
+    fun compiledBackendMask(): Int {
+        ensureNativeLoaded()
+        return if (isNativeLoaded) nativeGetCompiledBackendMask() else BACKEND_CPU
+    }
+
+    private fun NativeBackendPreference.nativeValue(): Int = when (this) {
+        NativeBackendPreference.Auto -> BACKEND_AUTO
+        NativeBackendPreference.Cpu -> BACKEND_CPU
+        NativeBackendPreference.Cuda -> BACKEND_CUDA
     }
 
     /**

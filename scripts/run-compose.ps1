@@ -108,14 +108,15 @@ $env:PATH = ($pathPrefixes -join ";") + ";" + $env:PATH
 $CudaDll = Join-Path $ProjectRoot "ggml-cuda.dll"
 $CudaRuntimeDll = Get-ChildItem -Path $ProjectRoot -Filter "cudart64_*.dll" -File -ErrorAction SilentlyContinue | Select-Object -First 1
 $ExistingCudaBackend = (Test-Path $CudaDll) -and $null -ne $CudaRuntimeDll
+if ($Cuda) {
+    $env:QWEN_TTS_BACKEND = "cuda"
+}
 
 Write-Host "Starting Qwen-TTS Studio Compose Desktop..." -ForegroundColor Cyan
 Write-Host "Project: $ProjectRoot"
 Write-Host "Java: $JavaHome"
 Write-Host "Build native before run: $BuildNative"
-if ($BuildNative) {
-    Write-Host "Requested native CUDA build: $Cuda"
-}
+Write-Host "Requested CUDA backend: $Cuda"
 Write-Host "Existing CUDA backend DLLs: $ExistingCudaBackend"
 Write-Host "-------------------------------------------"
 

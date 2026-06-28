@@ -18,6 +18,11 @@ $GradleWrapper = Join-Path $RepoRoot "gradlew.bat"
 $PackageName = "qwen-tts-studio"
 $PackageVersion = if ([string]::IsNullOrWhiteSpace($env:APP_VERSION)) { "1.0.0" } else { $env:APP_VERSION }
 $PreferredJavaMajor = if ([string]::IsNullOrWhiteSpace($env:PACKAGE_JAVA_MAJOR)) { 25 } else { [int]$env:PACKAGE_JAVA_MAJOR }
+$PortableCudaArchitectures = if ([string]::IsNullOrWhiteSpace($env:QWEN_TTS_PACKAGE_CUDA_ARCHITECTURES)) {
+    "75-real;80-real;86-real;89-real;90-real;100-real;110-real;120-real"
+} else {
+    $env:QWEN_TTS_PACKAGE_CUDA_ARCHITECTURES
+}
 
 if ($RequireMsi) {
     $BuildMsi = $true
@@ -211,7 +216,14 @@ Write-Host "Using JAVA_HOME: $ResolvedJavaHome" -ForegroundColor DarkCyan
 
 if (-not $SkipNativeBuild) {
     Write-Host "Step 1/4: Build native DLLs..." -ForegroundColor Cyan
-    & (Join-Path $PSScriptRoot "build-native.ps1") -Configuration $Configuration -CopyToRoot -Cuda:$Cuda -UseNinja:$UseNinja -Clean:$Clean
+    $nativeBuildArgs = @("-Configuration", $Configuration, "-CopyToRoot")
+    if ($Cuda) {
+        $nativeBuildArgs += "-Cuda"
+        $nativeBuildArgs += @("-CudaArchitectures", $PortableCudaArchitectures)
+    }
+    if ($UseNinja) { $nativeBuildArgs += "-UseNinja" }
+    if ($Clean) { $nativeBuildArgs += "-Clean" }
+    & (Join-Path $PSScriptRoot "build-native.ps1") @nativeBuildArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Native build failed with exit code $LASTEXITCODE"
     }

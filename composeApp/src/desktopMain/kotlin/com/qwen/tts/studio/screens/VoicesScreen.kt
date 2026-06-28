@@ -61,6 +61,7 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
     val recordingState by viewModel.recordingState.collectAsState()
     val modelDir by settingsViewModel.modelDir.collectAsState()
     val modelName by settingsViewModel.modelName.collectAsState()
+    val backendPreference by settingsViewModel.backendPreference.collectAsState()
     var presetName by remember { mutableStateOf("") }
     var referencePath by remember { mutableStateOf("") }
 
@@ -71,8 +72,8 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
         file?.path?.let { referencePath = it }
     }
 
-    LaunchedEffect(modelDir, modelName) {
-        viewModel.refreshModelCapabilities(modelDir, modelName)
+    LaunchedEffect(modelDir, modelName, backendPreference) {
+        viewModel.refreshModelCapabilities(modelDir, modelName, backendPreference)
     }
 
     LaunchedEffect(recordingState.lastRecordingPath) {
@@ -161,7 +162,7 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
                             File(referencePath).nameWithoutExtension
                         }
                         val nameToUse = presetName.ifBlank { fallbackName }
-                        viewModel.createVoicePreset(nameToUse, referencePath, modelDir, modelName)
+                        viewModel.createVoicePreset(nameToUse, referencePath, modelDir, modelName, backendPreference)
                         presetName = ""
                         referencePath = ""
                     },
@@ -189,7 +190,7 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
                     preset = preset,
                     isCreating = isCreating,
                     modelDir = modelDir,
-                    onGenerateMissing = { dim -> viewModel.createMissingSpeakerEmbedding(preset.id, dim, modelDir) },
+                    onGenerateMissing = { dim -> viewModel.createMissingSpeakerEmbedding(preset.id, dim, modelDir, backendPreference) },
                     onDelete = { viewModel.deleteVoicePreset(preset.id) }
                 )
             }

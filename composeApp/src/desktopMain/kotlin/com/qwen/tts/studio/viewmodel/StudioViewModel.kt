@@ -2,6 +2,7 @@ package com.qwen.tts.studio.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.qwen.tts.studio.engine.NativeBackendPreference
 import com.qwen.tts.studio.engine.QwenEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -214,7 +215,8 @@ class StudioViewModel : ViewModel() {
     fun generateAudio(
         modelDir: String,
         modelName: String?,
-        speakerEmbeddingPath: String?
+        speakerEmbeddingPath: String?,
+        backendPreference: NativeBackendPreference
     ) {
         val currentState = _uiState.value
         if (currentState.text.isBlank() || currentState.isGenerating) return
@@ -253,7 +255,7 @@ class StudioViewModel : ViewModel() {
                 withContext(Dispatchers.IO) {
                     val resolvedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
                     val loaded = withContext(nativeDispatcher) {
-                        qwenEngine.load(modelDir, resolvedModelName)
+                        qwenEngine.load(modelDir, resolvedModelName, backendPreference)
                     }
                     if (!loaded) {
                         throw Exception("Failed to load Qwen3 models from directory.")
@@ -387,11 +389,15 @@ class StudioViewModel : ViewModel() {
      * @param modelDir Directory containing the models.
      * @param modelName Optional specific model name.
      */
-    fun refreshModelCapabilities(modelDir: String, modelName: String?) {
+    fun refreshModelCapabilities(
+        modelDir: String,
+        modelName: String?,
+        backendPreference: NativeBackendPreference
+    ) {
         if (modelDir.isBlank() || _uiState.value.isGenerating) return
         viewModelScope.launch(Dispatchers.IO) {
             val resolvedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
-            val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, resolvedModelName) }
+            val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, resolvedModelName, backendPreference) }
             if (!loaded) return@launch
 
             val caps = withContext(nativeDispatcher) { qwenEngine.getModelCapabilities() }
@@ -903,6 +909,12 @@ class StudioViewModel : ViewModel() {
             index += charCount
         }
         return text.length
+    }
+
+    fun releaseEngine() {
+        viewModelScope.launch(nativeDispatcher) {
+            qwenEngine.release()
+        }
     }
 
     override fun onCleared() {

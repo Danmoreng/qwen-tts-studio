@@ -90,6 +90,7 @@ fun StudioScreen(
     val uiState by viewModel.uiState.collectAsState()
     val modelDir by settingsViewModel.modelDir.collectAsState()
     val modelName by settingsViewModel.modelName.collectAsState()
+    val backendPreference by settingsViewModel.backendPreference.collectAsState()
     val availableModelNames by settingsViewModel.availableModelNames.collectAsState()
     val voices by voicesViewModel.voices.collectAsState()
     val isCreatingVoice by voicesViewModel.isCreating.collectAsState()
@@ -105,8 +106,8 @@ fun StudioScreen(
         }
     }
 
-    LaunchedEffect(modelDir, modelName) {
-        viewModel.refreshModelCapabilities(modelDir, modelName)
+    LaunchedEffect(modelDir, modelName, backendPreference) {
+        viewModel.refreshModelCapabilities(modelDir, modelName, backendPreference)
     }
 
     Column(
@@ -425,7 +426,8 @@ fun StudioScreen(
                                     voicesViewModel.createMissingSpeakerEmbedding(
                                         uiState.selectedVoice,
                                         uiState.speakerEmbeddingDim,
-                                        modelDir
+                                        modelDir,
+                                        backendPreference
                                     )
                                 },
                                 enabled = !isCreatingVoice
@@ -442,7 +444,7 @@ fun StudioScreen(
                     }
 
                     Button(
-                        onClick = { viewModel.generateAudio(modelDir, modelName, speakerEmbeddingPath) },
+                        onClick = { viewModel.generateAudio(modelDir, modelName, speakerEmbeddingPath, backendPreference) },
                         enabled = uiState.text.isNotBlank() && !uiState.isGenerating && !missingSpeakerEmbedding,
                         contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
                     ) {

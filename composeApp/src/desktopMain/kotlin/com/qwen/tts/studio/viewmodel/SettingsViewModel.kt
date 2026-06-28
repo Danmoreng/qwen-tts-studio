@@ -1,6 +1,8 @@
 package com.qwen.tts.studio.viewmodel
 
 import androidx.lifecycle.ViewModel
+import com.qwen.tts.studio.engine.NativeBackendPreference
+import com.qwen.tts.studio.engine.QwenEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -128,6 +130,12 @@ class SettingsViewModel : ViewModel() {
     /** The currently selected model filename. */
     val modelName = _modelName.asStateFlow()
 
+    private val _backendPreference = MutableStateFlow(loadBackendPreference())
+    val backendPreference = _backendPreference.asStateFlow()
+
+    private val _compiledBackendMask = MutableStateFlow(QwenEngine.BACKEND_CPU)
+    val compiledBackendMask = _compiledBackendMask.asStateFlow()
+
     private val _availableModelNames = MutableStateFlow(scanModelNames(_modelDir.value))
     /** List of available model filenames found in the current model directory. */
     val availableModelNames = _availableModelNames.asStateFlow()
@@ -148,6 +156,10 @@ class SettingsViewModel : ViewModel() {
         if (_modelName.value.isBlank()) {
             _modelName.value = _availableModelNames.value.firstOrNull() ?: defaultModelName
             saveAll()
+        }
+        scope.launch(Dispatchers.IO) {
+            _compiledBackendMask.value = runCatching { QwenEngine().compiledBackendMask() }
+                .getOrDefault(QwenEngine.BACKEND_CPU)
         }
     }
 
@@ -192,6 +204,24 @@ class SettingsViewModel : ViewModel() {
             }
         }
         return false
+    }
+
+    private fun loadBackendPreference(): NativeBackendPreference {
+        System.getenv("QWEN_TTS_BACKEND")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { return NativeBackendPreference.fromId(it) }
+
+        if (settingsFile.exists()) {
+            try {
+                val props = Properties()
+                settingsFile.inputStream().use { props.load(it) }
+                return NativeBackendPreference.fromId(props.getProperty("backendPreference", "auto"))
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        return NativeBackendPreference.Auto
     }
 
     private fun scanModelNames(dirPath: String): List<String> {
@@ -247,6 +277,7 @@ class SettingsViewModel : ViewModel() {
             }
             props.setProperty("modelDir", _modelDir.value)
             props.setProperty("modelName", _modelName.value)
+            props.setProperty("backendPreference", _backendPreference.value.id)
             props.setProperty("welcomeDismissed", (!_showWelcome.value).toString())
             // Clean up old key so future reads don't depend on it.
             props.remove("modelVariant")
@@ -281,6 +312,11 @@ class SettingsViewModel : ViewModel() {
      */
     fun setModelName(name: String) {
         _modelName.value = name.trim()
+        saveAll()
+    }
+
+    fun setBackendPreference(preference: NativeBackendPreference) {
+        _backendPreference.value = preference
         saveAll()
     }
 
