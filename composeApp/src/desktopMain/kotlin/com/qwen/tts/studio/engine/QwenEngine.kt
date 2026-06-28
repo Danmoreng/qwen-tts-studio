@@ -55,6 +55,40 @@ class QwenEngine {
         val threads: Int = 4
     )
 
+    data class StreamingOptions(
+        val chunkSeconds: Float = 0.75f,
+        val leftContextSeconds: Float = 2.0f,
+        val collectAudio: Boolean = true
+    )
+
+    data class NativeAudioChunk(
+        val audio: FloatArray,
+        val sampleRate: Int,
+        val startSample: Long,
+        val endSample: Long,
+        val startFrame: Int,
+        val endFrame: Int,
+        val startTextByte: Int,
+        val endTextByte: Int,
+        val textAlignmentKind: Int,
+        val confidence: Float
+    )
+
+    interface StreamingAudioCallback {
+        fun onAudioChunk(
+            audio: FloatArray,
+            sampleRate: Int,
+            startSample: Long,
+            endSample: Long,
+            startFrame: Int,
+            endFrame: Int,
+            startTextByte: Int,
+            endTextByte: Int,
+            textAlignmentKind: Int,
+            confidence: Float
+        ): Boolean
+    }
+
     /**
      * Capabilities of the currently loaded model.
      *
@@ -341,6 +375,17 @@ class QwenEngine {
         speakerEmbeddingPath: String?,
         params: Any?
     ): NativeResult?
+    private external fun nativeSynthesizeStreaming(
+        ptr: Long,
+        text: String,
+        referenceWav: String?,
+        speakerEmbeddingPath: String?,
+        params: Any?,
+        chunkSeconds: Float,
+        leftContextSeconds: Float,
+        collectAudio: Boolean,
+        callback: StreamingAudioCallback
+    ): NativeResult?
     private external fun nativeExtractSpeakerEmbedding(ptr: Long, referenceWav: String, outputPath: String): Boolean
     private external fun nativeGetAvailableSpeakers(ptr: Long): String?
     private external fun nativeGetModelCapabilities(ptr: Long): NativeCapabilities?
@@ -429,6 +474,79 @@ class QwenEngine {
                 }
                 null
             }
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    fun generateStreaming(
+        text: String,
+        referenceWav: String? = null,
+        speakerEmbeddingPath: String? = null,
+        languageId: Int = 2050,
+        instruction: String? = null,
+        speaker: String? = null,
+        options: StreamingOptions = StreamingOptions(),
+        onAudioChunk: (NativeAudioChunk) -> Boolean
+    ): NativeResult? {
+        if (useCliFallback) {
+            val audio = generateViaCli(text, referenceWav, speakerEmbeddingPath, languageId, instruction, speaker)
+            return if (audio != null) {
+                NativeResult(audio, 24_000, true, null, 0L)
+            } else {
+                NativeResult(null, 24_000, false, "Streaming is unavailable in CLI fallback mode.", 0L)
+            }
+        }
+
+        if (nativePtr == 0L) return null
+
+        return try {
+            val params = NativeParams(languageId = languageId, instruction = instruction, speaker = speaker)
+            val callback = object : StreamingAudioCallback {
+                override fun onAudioChunk(
+                    audio: FloatArray,
+                    sampleRate: Int,
+                    startSample: Long,
+                    endSample: Long,
+                    startFrame: Int,
+                    endFrame: Int,
+                    startTextByte: Int,
+                    endTextByte: Int,
+                    textAlignmentKind: Int,
+                    confidence: Float
+                ): Boolean {
+                    return onAudioChunk(
+                        NativeAudioChunk(
+                            audio = audio,
+                            sampleRate = sampleRate,
+                            startSample = startSample,
+                            endSample = endSample,
+                            startFrame = startFrame,
+                            endFrame = endFrame,
+                            startTextByte = startTextByte,
+                            endTextByte = endTextByte,
+                            textAlignmentKind = textAlignmentKind,
+                            confidence = confidence
+                        )
+                    )
+                }
+            }
+            val result = nativeSynthesizeStreaming(
+                nativePtr,
+                text,
+                referenceWav,
+                speakerEmbeddingPath,
+                params,
+                options.chunkSeconds,
+                options.leftContextSeconds,
+                options.collectAudio,
+                callback
+            )
+            if (result != null && !result.success) {
+                System.err.println("[QwenEngine] Native streaming synthesis failed: ${result.errorMsg}")
+            }
+            result
         } catch (e: Throwable) {
             e.printStackTrace()
             null

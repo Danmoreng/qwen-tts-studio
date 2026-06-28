@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -57,7 +58,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -341,6 +347,11 @@ fun StudioScreen(
                     onValueChange = { viewModel.onTextChange(it) },
                     placeholder = { Text("Enter the text you want to be spoken here...") },
                     modifier = Modifier.fillMaxWidth().weight(1f),
+                    visualTransformation = highlightedTextTransformation(
+                        start = uiState.highlightedTextStart,
+                        end = uiState.highlightedTextEnd,
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ),
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent,
@@ -367,6 +378,22 @@ fun StudioScreen(
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Checkbox(
+                            checked = uiState.useStreaming,
+                            onCheckedChange = { viewModel.onStreamingChange(it) },
+                            enabled = !uiState.isGenerating
+                        )
+                        Text(
+                            "Streaming",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
 
                     val useNamedSpeaker = uiState.supportsNamedSpeakers && uiState.selectedSpeaker.isNotBlank()
                     val speakerEmbeddingPath = if (uiState.supportsCloning && !useNamedSpeaker) {
@@ -422,11 +449,11 @@ fun StudioScreen(
                         if (uiState.isGenerating) {
                             CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
                             Spacer(Modifier.width(12.dp))
-                            Text("Processing...")
+                            Text(if (uiState.useStreaming) "Streaming..." else "Processing...")
                         } else {
                             Icon(Icons.Default.PlayArrow, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
-                            Text("Read Aloud")
+                            Text(if (uiState.useStreaming) "Stream Aloud" else "Read Aloud")
                         }
                     }
                 }
@@ -499,6 +526,7 @@ fun StudioScreen(
                 Text(
                     text = when {
                         uiState.isSaving -> "Saving to file..."
+                        uiState.isGenerating && uiState.useStreaming -> "Streaming generated audio..."
                         uiState.isPlaying -> "Playing generated audio..."
                         uiState.hasAudio -> "Audio ready"
                         else -> "Ready"
@@ -516,4 +544,25 @@ private fun formatPlaybackTime(seconds: Float): String {
     val minutes = totalSeconds / 60
     val secs = totalSeconds % 60
     return "%d:%02d".format(minutes, secs)
+}
+
+private fun highlightedTextTransformation(start: Int, end: Int, color: Color): VisualTransformation {
+    if (start < 0 || end <= start) return VisualTransformation.None
+
+    return VisualTransformation { text ->
+        val safeStart = start.coerceIn(0, text.length)
+        val safeEnd = end.coerceIn(safeStart, text.length)
+        if (safeEnd <= safeStart) {
+            TransformedText(text, OffsetMapping.Identity)
+        } else {
+            val builder = AnnotatedString.Builder()
+            builder.append(text)
+            builder.addStyle(
+                SpanStyle(background = color),
+                start = safeStart,
+                end = safeEnd
+            )
+            TransformedText(builder.toAnnotatedString(), OffsetMapping.Identity)
+        }
+    }
 }

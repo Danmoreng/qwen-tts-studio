@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.Executors
 import javax.sound.sampled.AudioFileFormat
 import javax.sound.sampled.AudioFormat
@@ -64,8 +65,13 @@ data class StudioUiState(
     val isPlaying: Boolean = false,
     val isSaving: Boolean = false,
     val hasAudio: Boolean = false,
+    val useStreaming: Boolean = false,
     val playbackPositionSeconds: Float = 0f,
     val playbackDurationSeconds: Float = 0f,
+    val highlightedTextStart: Int = -1,
+    val highlightedTextEnd: Int = -1,
+    val textAlignmentKind: Int = 0,
+    val textAlignmentConfidence: Float = 0f,
     val progress: Float = 0f,
     val error: String? = null
 )
@@ -80,6 +86,7 @@ class StudioViewModel : ViewModel() {
 
     private val qwenEngine = QwenEngine()
     private var lastGeneratedAudio: FloatArray? = null
+    private var lastGeneratedSampleRate: Int = AUDIO_SAMPLE_RATE
     private var playbackJob: Job? = null
     @Volatile
     private var playbackRequestedPosition: Int? = null
@@ -89,6 +96,15 @@ class StudioViewModel : ViewModel() {
     private var playbackPaused: Boolean = false
     @Volatile
     private var playbackLine: SourceDataLine? = null
+    @Volatile
+    private var streamingCancelled: Boolean = false
+    @Volatile
+    private var streamingGenerationActive: Boolean = false
+    private val playbackTextSpansLock = Any()
+    private val playbackTextSpans = mutableListOf<StreamingTextSpan>()
+    private val streamingAudioLock = Any()
+    private var streamingAudioBuffer = FloatArray(0)
+    private var streamingAudioSamples: Int = 0
     private val nativeDispatcher = Executors.newSingleThreadExecutor { runnable ->
         Thread(null, runnable, "QwenNativeThread", 8L * 1024 * 1024).apply {
             isDaemon = true
@@ -99,6 +115,15 @@ class StudioViewModel : ViewModel() {
         private const val AUDIO_SAMPLE_RATE = 24_000
         private const val PLAYBACK_CHUNK_SAMPLES = 1_024
     }
+
+    private data class StreamingTextSpan(
+        val startSample: Long,
+        val endSample: Long,
+        val startText: Int,
+        val endText: Int,
+        val alignmentKind: Int,
+        val confidence: Float
+    )
 
     /**
      * Updates the text to be synthesized.
@@ -145,6 +170,10 @@ class StudioViewModel : ViewModel() {
      */
     fun onInstructionChange(newInstruction: String) {
         _uiState.update { it.copy(selectedInstruction = newInstruction) }
+    }
+
+    fun onStreamingChange(enabled: Boolean) {
+        _uiState.update { it.copy(useStreaming = enabled, error = null) }
     }
 
     private fun applyCapabilitiesAndSpeakers(
@@ -194,14 +223,28 @@ class StudioViewModel : ViewModel() {
         }
 
         viewModelScope.launch {
+            var generationUsedStreaming = false
             stopPlayback(resetPosition = true)
+            streamingCancelled = false
+            streamingGenerationActive = false
+            synchronized(playbackTextSpansLock) {
+                playbackTextSpans.clear()
+            }
+            synchronized(streamingAudioLock) {
+                streamingAudioBuffer = FloatArray(0)
+                streamingAudioSamples = 0
+            }
             _uiState.update {
                 it.copy(
                     isGenerating = true,
                     error = null,
                     hasAudio = false,
                     playbackPositionSeconds = 0f,
-                    playbackDurationSeconds = 0f
+                    playbackDurationSeconds = 0f,
+                    highlightedTextStart = -1,
+                    highlightedTextEnd = -1,
+                    textAlignmentKind = 0,
+                    textAlignmentConfidence = 0f
                 )
             }
 
@@ -239,35 +282,100 @@ class StudioViewModel : ViewModel() {
                         null
                     }
 
-                    val audio = withContext(nativeDispatcher) {
-                        qwenEngine.generate(
-                            text = latestState.text,
-                            referenceWav = null,
-                            speakerEmbeddingPath = effectiveEmbedding,
-                            languageId = langId,
-                            instruction = effectiveInstruction,
-                            speaker = effectiveSpeaker
-                        )
-                    }
-                    if (audio != null) {
-                        lastGeneratedAudio = audio
-                        playbackPositionSample = 0
-                        _uiState.update {
-                            it.copy(
-                                hasAudio = true,
-                                playbackPositionSeconds = 0f,
-                                playbackDurationSeconds = audio.size.toFloat() / AUDIO_SAMPLE_RATE
+                    if (latestState.useStreaming) {
+                        generationUsedStreaming = true
+                        streamingGenerationActive = true
+                        val streamedChunks = mutableListOf<FloatArray>()
+                        var streamedSampleRate = AUDIO_SAMPLE_RATE
+                        var totalStreamedSamples = 0
+
+                        val result = withContext(nativeDispatcher) {
+                            qwenEngine.generateStreaming(
+                                text = latestState.text,
+                                referenceWav = null,
+                                speakerEmbeddingPath = effectiveEmbedding,
+                                languageId = langId,
+                                instruction = effectiveInstruction,
+                                speaker = effectiveSpeaker,
+                                options = QwenEngine.StreamingOptions(collectAudio = true)
+                            ) { chunk ->
+                                if (streamingCancelled) return@generateStreaming false
+
+                                streamedSampleRate = chunk.sampleRate.takeIf { it > 0 } ?: streamedSampleRate
+                                streamedChunks += chunk.audio
+                                totalStreamedSamples += chunk.audio.size
+
+                                appendStreamingChunk(chunk, latestState.text)
+                                _uiState.update {
+                                    it.copy(
+                                        hasAudio = true,
+                                        isPlaying = !playbackPaused,
+                                        playbackDurationSeconds = maxOf(
+                                            it.playbackDurationSeconds,
+                                            streamingAudioSampleCount().toFloat() / streamedSampleRate
+                                        )
+                                    )
+                                }
+
+                                startStreamingPlayback(streamedSampleRate, resume = false)
+                                true
+                            }
+                        }
+
+                        streamingGenerationActive = false
+
+                        val audio = result?.audio
+                            ?.takeIf { it.isNotEmpty() }
+                            ?: concatenateChunks(streamedChunks, totalStreamedSamples)
+                        if (result != null && result.success && audio.isNotEmpty()) {
+                            lastGeneratedAudio = audio
+                            lastGeneratedSampleRate = result.sampleRate.takeIf { it > 0 } ?: streamedSampleRate
+                            _uiState.update {
+                                it.copy(
+                                    hasAudio = true,
+                                    playbackDurationSeconds = audio.size.toFloat() / lastGeneratedSampleRate
+                                )
+                            }
+                        } else {
+                            throw Exception(result?.errorMsg ?: "Streaming generation failed.")
+                        }
+                    } else {
+                        val audio = withContext(nativeDispatcher) {
+                            qwenEngine.generate(
+                                text = latestState.text,
+                                referenceWav = null,
+                                speakerEmbeddingPath = effectiveEmbedding,
+                                languageId = langId,
+                                instruction = effectiveInstruction,
+                                speaker = effectiveSpeaker
                             )
                         }
-                        startPlayback()
-                    } else {
-                        throw Exception("Generation failed.")
+                        if (audio != null) {
+                            lastGeneratedAudio = audio
+                            lastGeneratedSampleRate = AUDIO_SAMPLE_RATE
+                            playbackPositionSample = 0
+                            _uiState.update {
+                                it.copy(
+                                    hasAudio = true,
+                                    playbackPositionSeconds = 0f,
+                                    playbackDurationSeconds = audio.size.toFloat() / lastGeneratedSampleRate
+                                )
+                            }
+                            startPlayback()
+                        } else {
+                            throw Exception("Generation failed.")
+                        }
                     }
                 }
             } catch (e: Throwable) {
+                streamingGenerationActive = false
                 _uiState.update { it.copy(error = e.message ?: "Unknown error occurred") }
             } finally {
-                _uiState.update { it.copy(isGenerating = false) }
+                streamingGenerationActive = false
+                streamingCancelled = false
+                _uiState.update { state ->
+                    state.copy(isGenerating = false)
+                }
             }
         }
     }
@@ -307,7 +415,11 @@ class StudioViewModel : ViewModel() {
         if (_uiState.value.isPlaying) {
             pausePlayback()
         } else {
-            startPlayback()
+            if (_uiState.value.isGenerating && _uiState.value.useStreaming) {
+                startStreamingPlayback(lastGeneratedSampleRate, resume = true)
+            } else {
+                startPlayback()
+            }
         }
     }
 
@@ -318,17 +430,27 @@ class StudioViewModel : ViewModel() {
     }
 
     fun seekPlayback(positionSeconds: Float) {
-        val samples = lastGeneratedAudio ?: return
-        val targetSample = (positionSeconds * AUDIO_SAMPLE_RATE)
+        val sampleRate = lastGeneratedSampleRate.coerceAtLeast(1)
+        val availableSamples = if (_uiState.value.isGenerating && _uiState.value.useStreaming) {
+            streamingAudioSampleCount()
+        } else {
+            lastGeneratedAudio?.size ?: return
+        }
+        val targetSample = (positionSeconds * sampleRate)
             .toInt()
-            .coerceIn(0, samples.size)
+            .coerceIn(0, availableSamples)
         playbackPositionSample = targetSample
         playbackRequestedPosition = targetSample
         playbackLine?.flush()
+        val span = playbackSpanForSample(targetSample.toLong())
         _uiState.update {
             it.copy(
-                playbackPositionSeconds = targetSample.toFloat() / AUDIO_SAMPLE_RATE,
-                playbackDurationSeconds = samples.size.toFloat() / AUDIO_SAMPLE_RATE
+                playbackPositionSeconds = targetSample.toFloat() / sampleRate,
+                playbackDurationSeconds = availableSamples.toFloat() / sampleRate,
+                highlightedTextStart = span?.startText ?: -1,
+                highlightedTextEnd = span?.endText ?: -1,
+                textAlignmentKind = span?.alignmentKind ?: 0,
+                textAlignmentConfidence = span?.confidence ?: 0f
             )
         }
     }
@@ -343,7 +465,8 @@ class StudioViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isSaving = true) }
             try {
-                val format = AudioFormat(24000f, 16, 1, true, false)
+                val sampleRate = lastGeneratedSampleRate.coerceAtLeast(1)
+                val format = AudioFormat(sampleRate.toFloat(), 16, 1, true, false)
                 val buffer = ByteArray(samples.size * 2)
                 for (i in samples.indices) {
                     val sample = (samples[i] * 32767).toInt().coerceIn(-32768, 32767)
@@ -403,6 +526,7 @@ class StudioViewModel : ViewModel() {
         if (playbackPositionSample >= samples.size) {
             playbackPositionSample = 0
         }
+        val sampleRate = lastGeneratedSampleRate.coerceAtLeast(1)
 
         playbackPaused = false
         playbackLine?.start()
@@ -416,7 +540,7 @@ class StudioViewModel : ViewModel() {
             try {
                 _uiState.update { it.copy(isPlaying = true) }
 
-                val format = AudioFormat(AUDIO_SAMPLE_RATE.toFloat(), 16, 1, true, false)
+                val format = AudioFormat(sampleRate.toFloat(), 16, 1, true, false)
                 val info = DataLine.Info(SourceDataLine::class.java, format)
 
                 val mixer = findWorkingMixer(format)
@@ -464,11 +588,16 @@ class StudioViewModel : ViewModel() {
 
                     line.write(chunkBuffer, 0, chunkSamples * 2)
                     playbackPositionSample = start + chunkSamples
+                    val span = playbackSpanForSample(playbackPositionSample.toLong())
                     _uiState.update {
                         it.copy(
                             isPlaying = true,
-                            playbackPositionSeconds = playbackPositionSample.toFloat() / AUDIO_SAMPLE_RATE,
-                            playbackDurationSeconds = samples.size.toFloat() / AUDIO_SAMPLE_RATE
+                            playbackPositionSeconds = playbackPositionSample.toFloat() / sampleRate,
+                            playbackDurationSeconds = samples.size.toFloat() / sampleRate,
+                            highlightedTextStart = span?.startText ?: -1,
+                            highlightedTextEnd = span?.endText ?: -1,
+                            textAlignmentKind = span?.alignmentKind ?: 0,
+                            textAlignmentConfidence = span?.confidence ?: 0f
                         )
                     }
                 }
@@ -496,7 +625,9 @@ class StudioViewModel : ViewModel() {
                 _uiState.update {
                     it.copy(
                         isPlaying = false,
-                        playbackPositionSeconds = playbackPositionSample.toFloat() / AUDIO_SAMPLE_RATE
+                        playbackPositionSeconds = playbackPositionSample.toFloat() / sampleRate,
+                        highlightedTextStart = -1,
+                        highlightedTextEnd = -1
                     )
                 }
             }
@@ -504,10 +635,19 @@ class StudioViewModel : ViewModel() {
     }
 
     private fun stopPlayback(resetPosition: Boolean) {
+        streamingCancelled = true
         playbackPaused = false
         playbackRequestedPosition = null
         playbackJob?.cancel()
         playbackJob = null
+        streamingGenerationActive = false
+        synchronized(playbackTextSpansLock) {
+            playbackTextSpans.clear()
+        }
+        synchronized(streamingAudioLock) {
+            streamingAudioBuffer = FloatArray(0)
+            streamingAudioSamples = 0
+        }
         runCatching { playbackLine?.stop() }
         runCatching { playbackLine?.flush() }
         runCatching { playbackLine?.close() }
@@ -518,9 +658,242 @@ class StudioViewModel : ViewModel() {
         _uiState.update {
             it.copy(
                 isPlaying = false,
-                playbackPositionSeconds = if (resetPosition) 0f else playbackPositionSample.toFloat() / AUDIO_SAMPLE_RATE
+                playbackPositionSeconds = if (resetPosition) {
+                    0f
+                } else {
+                    playbackPositionSample.toFloat() / lastGeneratedSampleRate.coerceAtLeast(1)
+                },
+                highlightedTextStart = -1,
+                highlightedTextEnd = -1
             )
         }
+    }
+
+    private fun appendStreamingChunk(chunk: QwenEngine.NativeAudioChunk, text: String) {
+        val samples = chunk.audio
+        if (samples.isEmpty()) return
+
+        synchronized(streamingAudioLock) {
+            val requiredSize = streamingAudioSamples + samples.size
+            if (requiredSize > streamingAudioBuffer.size) {
+                var nextSize = maxOf(requiredSize, streamingAudioBuffer.size * 2)
+                if (nextSize == 0) nextSize = requiredSize
+                streamingAudioBuffer = streamingAudioBuffer.copyOf(nextSize)
+            }
+            samples.copyInto(streamingAudioBuffer, destinationOffset = streamingAudioSamples)
+            streamingAudioSamples += samples.size
+        }
+
+        byteRangeToTextRange(text, chunk.startTextByte, chunk.endTextByte)?.let { textRange ->
+            synchronized(playbackTextSpansLock) {
+                playbackTextSpans += StreamingTextSpan(
+                    startSample = chunk.startSample,
+                    endSample = chunk.endSample,
+                    startText = textRange.first,
+                    endText = textRange.second,
+                    alignmentKind = chunk.textAlignmentKind,
+                    confidence = chunk.confidence
+                )
+            }
+        }
+    }
+
+    private fun ensureStreamingLine(sampleRate: Int): SourceDataLine {
+        playbackLine?.let { return it }
+
+        val format = AudioFormat(sampleRate.toFloat(), 16, 1, true, false)
+        val info = DataLine.Info(SourceDataLine::class.java, format)
+        val mixer = findWorkingMixer(format)
+        val line = if (mixer != null) {
+            mixer.getLine(info) as SourceDataLine
+        } else {
+            AudioSystem.getLine(info) as SourceDataLine
+        }
+        line.open(format)
+        line.start()
+        playbackLine = line
+        return line
+    }
+
+    private fun startStreamingPlayback(sampleRate: Int, resume: Boolean) {
+        lastGeneratedSampleRate = sampleRate.coerceAtLeast(1)
+        if (resume) {
+            playbackPaused = false
+            playbackLine?.start()
+        }
+
+        if (playbackJob?.isActive == true) {
+            _uiState.update { it.copy(isPlaying = !playbackPaused) }
+            return
+        }
+
+        playbackJob = viewModelScope.launch(Dispatchers.IO) {
+            var line: SourceDataLine? = null
+            try {
+                line = ensureStreamingLine(lastGeneratedSampleRate)
+                _uiState.update { it.copy(isPlaying = true) }
+
+                val chunkBuffer = ByteArray(PLAYBACK_CHUNK_SAMPLES * 2)
+                while (isActive) {
+                    playbackRequestedPosition?.let { requested ->
+                        playbackRequestedPosition = null
+                        playbackPositionSample = requested.coerceIn(0, streamingAudioSampleCount())
+                        line.flush()
+                    }
+
+                    if (playbackPaused) {
+                        line.stop()
+                        _uiState.update { it.copy(isPlaying = false) }
+                        while (isActive && playbackPaused) {
+                            delay(25)
+                        }
+                        if (!isActive) break
+                        line.start()
+                        _uiState.update { it.copy(isPlaying = true) }
+                    }
+
+                    val availableSamples = streamingAudioSampleCount()
+                    if (playbackPositionSample >= availableSamples) {
+                        val span = playbackSpanForSample(playbackPositionSample.toLong())
+                        _uiState.update {
+                            it.copy(
+                                isPlaying = true,
+                                playbackPositionSeconds = playbackPositionSample.toFloat() / lastGeneratedSampleRate,
+                                playbackDurationSeconds = availableSamples.toFloat() / lastGeneratedSampleRate,
+                                highlightedTextStart = span?.startText ?: -1,
+                                highlightedTextEnd = span?.endText ?: -1,
+                                textAlignmentKind = span?.alignmentKind ?: 0,
+                                textAlignmentConfidence = span?.confidence ?: 0f
+                            )
+                        }
+                        if (!streamingGenerationActive) break
+                        delay(25)
+                        continue
+                    }
+
+                    val start = playbackPositionSample
+                    val chunkSamples = minOf(PLAYBACK_CHUNK_SAMPLES, availableSamples - start)
+                    if (chunkSamples <= 0) {
+                        delay(10)
+                        continue
+                    }
+
+                    fillPcm16FromStreamingBuffer(start, chunkSamples, chunkBuffer)
+                    line.write(chunkBuffer, 0, chunkSamples * 2)
+                    playbackPositionSample = start + chunkSamples
+                    val span = playbackSpanForSample(playbackPositionSample.toLong())
+                    _uiState.update {
+                        it.copy(
+                            isPlaying = true,
+                            playbackPositionSeconds = playbackPositionSample.toFloat() / lastGeneratedSampleRate,
+                            playbackDurationSeconds = streamingAudioSampleCount().toFloat() / lastGeneratedSampleRate,
+                            highlightedTextStart = span?.startText ?: -1,
+                            highlightedTextEnd = span?.endText ?: -1,
+                            textAlignmentKind = span?.alignmentKind ?: 0,
+                            textAlignmentConfidence = span?.confidence ?: 0f
+                        )
+                    }
+                }
+
+                if (!playbackPaused && isActive) {
+                    line.drain()
+                }
+            } catch (e: Exception) {
+                System.err.println("[StudioViewModel] Streaming playback failed: ${e.message}")
+                e.printStackTrace()
+            } finally {
+                runCatching { line?.stop() }
+                runCatching { line?.flush() }
+                runCatching { line?.close() }
+                if (playbackLine == line) {
+                    playbackLine = null
+                }
+                _uiState.update {
+                    it.copy(
+                        isPlaying = false,
+                        playbackPositionSeconds = playbackPositionSample.toFloat() / lastGeneratedSampleRate,
+                        playbackDurationSeconds = streamingAudioSampleCount().toFloat() / lastGeneratedSampleRate,
+                        highlightedTextStart = -1,
+                        highlightedTextEnd = -1
+                    )
+                }
+            }
+        }
+    }
+
+    private fun drainAndClosePlaybackLine() {
+        val line = playbackLine ?: return
+        runCatching { line.drain() }
+        runCatching { line.stop() }
+        runCatching { line.flush() }
+        runCatching { line.close() }
+        if (playbackLine == line) {
+            playbackLine = null
+        }
+    }
+
+    private fun streamingAudioSampleCount(): Int = synchronized(streamingAudioLock) {
+        streamingAudioSamples
+    }
+
+    private fun fillPcm16FromStreamingBuffer(startSample: Int, sampleCount: Int, output: ByteArray) {
+        synchronized(streamingAudioLock) {
+            for (offset in 0 until sampleCount) {
+                val sample = (streamingAudioBuffer[startSample + offset] * 32767)
+                    .toInt()
+                    .coerceIn(-32768, 32767)
+                val byteIndex = offset * 2
+                output[byteIndex] = (sample and 0xFF).toByte()
+                output[byteIndex + 1] = ((sample shr 8) and 0xFF).toByte()
+            }
+        }
+    }
+
+    private fun playbackSpanForSample(sample: Long): StreamingTextSpan? {
+        return synchronized(playbackTextSpansLock) {
+            playbackTextSpans.firstOrNull {
+                sample >= it.startSample && sample < it.endSample
+            } ?: playbackTextSpans.lastOrNull {
+                sample >= it.startSample
+            }
+        }
+    }
+
+    private fun concatenateChunks(chunks: List<FloatArray>, totalSamples: Int): FloatArray {
+        if (totalSamples <= 0) return FloatArray(0)
+        val output = FloatArray(totalSamples)
+        var cursor = 0
+        for (chunk in chunks) {
+            chunk.copyInto(output, destinationOffset = cursor)
+            cursor += chunk.size
+        }
+        return output
+    }
+
+    private fun byteRangeToTextRange(text: String, startByte: Int, endByte: Int): Pair<Int, Int>? {
+        if (startByte < 0 || endByte <= startByte || text.isEmpty()) return null
+        val start = utf8ByteOffsetToCharIndex(text, startByte)
+        val end = utf8ByteOffsetToCharIndex(text, endByte)
+        if (end <= start) return null
+        return start.coerceIn(0, text.length) to end.coerceIn(0, text.length)
+    }
+
+    private fun utf8ByteOffsetToCharIndex(text: String, byteOffset: Int): Int {
+        if (byteOffset <= 0) return 0
+
+        var bytes = 0
+        var index = 0
+        while (index < text.length) {
+            val codePoint = Character.codePointAt(text, index)
+            val charCount = Character.charCount(codePoint)
+            val byteCount = String(Character.toChars(codePoint)).toByteArray(StandardCharsets.UTF_8).size
+            if (bytes + byteCount > byteOffset) {
+                return index
+            }
+            bytes += byteCount
+            index += charCount
+        }
+        return text.length
     }
 
     override fun onCleared() {
