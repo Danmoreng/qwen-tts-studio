@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RecordVoiceOver
@@ -41,6 +42,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -436,11 +438,64 @@ fun StudioScreen(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                val duration = uiState.playbackDurationSeconds
+                val position = uiState.playbackPositionSeconds.coerceIn(0f, duration.coerceAtLeast(0f))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { viewModel.togglePlayback() },
+                        enabled = uiState.hasAudio
+                    ) {
+                        Icon(
+                            if (uiState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = null
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (uiState.isPlaying) "Pause" else "Play")
+                    }
+
+                    Text(
+                        formatPlaybackTime(position),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Slider(
+                        value = position,
+                        onValueChange = { viewModel.seekPlayback(it) },
+                        valueRange = 0f..duration.coerceAtLeast(0.01f),
+                        enabled = uiState.hasAudio,
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    Text(
+                        formatPlaybackTime(duration),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedButton(
+                        onClick = {
+                            saverLauncher.launch(
+                                baseName = "output",
+                                extension = "wav"
+                            )
+                        },
+                        enabled = uiState.hasAudio && !uiState.isSaving
+                    ) {
+                        Icon(Icons.Default.Save, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (uiState.isSaving) "Saving..." else "Save")
+                    }
+                }
+
                 Text(
                     text = when {
                         uiState.isSaving -> "Saving to file..."
@@ -448,35 +503,17 @@ fun StudioScreen(
                         uiState.hasAudio -> "Audio ready"
                         else -> "Ready"
                     },
-                    style = MaterialTheme.typography.bodyMedium
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (uiState.hasAudio) {
-                        OutlinedButton(
-                            onClick = {
-                                saverLauncher.launch(
-                                    baseName = "output",
-                                    extension = "wav"
-                                )
-                            },
-                            enabled = !uiState.isSaving
-                        ) {
-                            Icon(Icons.Default.Save, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Save to File")
-                        }
-                    }
-
-                    OutlinedButton(
-                        onClick = { viewModel.replayLastAudio() },
-                        enabled = !uiState.isPlaying && uiState.hasAudio
-                    ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Replay Last Audio")
-                    }
-                }
             }
         }
     }
+}
+
+private fun formatPlaybackTime(seconds: Float): String {
+    val totalSeconds = seconds.toInt().coerceAtLeast(0)
+    val minutes = totalSeconds / 60
+    val secs = totalSeconds % 60
+    return "%d:%02d".format(minutes, secs)
 }
