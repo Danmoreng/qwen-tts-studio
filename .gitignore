@@ -30,6 +30,9 @@ composeApp/build/
 *.wav
 output.wav
 external/build/
+external/build-*/
 external/build-linux/
 qwen3-tts-cli
 models/
+hs_err_pid*.log
+composeApp/hs_err_pid*.log
