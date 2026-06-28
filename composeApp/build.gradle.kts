@@ -57,7 +57,6 @@ compose.desktop {
             languageVersion.set(JavaLanguageVersion.of(25))
         }.get().metadata.installationPath.asFile.absolutePath
 
-        jvmArgs += "-Djna.tmpdir=${project.projectDir.absolutePath}/.jna"
         jvmArgs += "-Xss16m"
         jvmArgs += "-Djna.protected=false"
 

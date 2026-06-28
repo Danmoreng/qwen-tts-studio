@@ -53,7 +53,7 @@ def main() -> int:
     parser.add_argument("--dll", default="qwen3_tts.dll")
     parser.add_argument("--model-dir", required=True)
     parser.add_argument("--model-name", required=True)
-    parser.add_argument("--speaker", default="aiden")
+    parser.add_argument("--speaker", default="")
     parser.add_argument("--reference-wav")
     parser.add_argument("--speaker-embedding")
     parser.add_argument("--extract-embedding-out")
@@ -145,7 +145,7 @@ def main() -> int:
             ctypes.c_float(1.05),
             2053,
             "natuerlich und klar".encode("utf-8"),
-            args.speaker.encode("utf-8"),
+            args.speaker.encode("utf-8") if args.speaker else None,
         )
         print("synth=start", flush=True)
         if args.speaker_embedding:

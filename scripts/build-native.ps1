@@ -3,6 +3,7 @@ param(
     [string]$Platform = "x64",
     [switch]$CopyToRoot = $true,
     [switch]$Cuda,
+    [string]$CudaArchitectures,
     [switch]$UseNinja,
     [switch]$Clean
 )
@@ -131,6 +132,15 @@ if ($generator) {
 }
 if ($Cuda) {
     $cmakeArgs += @("-DQWEN3_TTS_CUDA=ON", "-DGGML_CUDA=ON")
+    if ([string]::IsNullOrWhiteSpace($CudaArchitectures)) {
+        $CudaArchitectures = if ([string]::IsNullOrWhiteSpace($env:QWEN_TTS_CUDA_ARCHITECTURES)) {
+            "75-real;80-real;86-real;89-real;90-real;100-real;110-real;120-real"
+        } else {
+            $env:QWEN_TTS_CUDA_ARCHITECTURES
+        }
+    }
+    $cmakeArgs += @("-DCMAKE_CUDA_ARCHITECTURES=$CudaArchitectures")
+    Write-Host "Using CUDA architectures: $CudaArchitectures" -ForegroundColor DarkCyan
 } else {
     $cmakeArgs += @("-DQWEN3_TTS_CUDA=OFF", "-DGGML_CUDA=OFF")
 }

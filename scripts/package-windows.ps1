@@ -278,6 +278,29 @@ foreach ($dll in $NativeDlls) {
     Copy-Item $src $AppRoot -Force
 }
 
+$DebugLauncherPath = Join-Path $AppRoot "$PackageName-debug.ps1"
+@'
+$ErrorActionPreference = "Stop"
+
+$appRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$logDir = Join-Path $appRoot "logs"
+New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+
+$timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$logFile = Join-Path $logDir "qwen-tts-studio-$timestamp.log"
+$env:PATH = "$appRoot;$env:PATH"
+
+Write-Host "Starting Qwen-TTS Studio with native logging..."
+Write-Host "Log file: $logFile"
+
+& (Join-Path $appRoot "qwen-tts-studio.exe") *> $logFile
+$exitCode = $LASTEXITCODE
+
+Write-Host "Qwen-TTS Studio exited with code $exitCode"
+Write-Host "Log file: $logFile"
+exit $exitCode
+'@ | Set-Content -Path $DebugLauncherPath -Encoding UTF8
+
 Write-Host "Step 4/4: Create portable zip..." -ForegroundColor Cyan
 $ZipDir = Join-Path $ComposeAppDir "build\compose\binaries\main\portable"
 New-Item -ItemType Directory -Path $ZipDir -Force | Out-Null
