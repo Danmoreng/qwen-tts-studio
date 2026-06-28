@@ -4,7 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.qwen.tts.studio.engine.QwenEngine
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -12,6 +14,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.Executors
+import javax.sound.sampled.AudioFileFormat
+import javax.sound.sampled.AudioFormat
+import javax.sound.sampled.AudioInputStream
+import javax.sound.sampled.AudioSystem
+import javax.sound.sampled.DataLine
+import javax.sound.sampled.TargetDataLine
 
 /**
  * Represents a voice profile that can be used for synthesis.
@@ -33,6 +41,12 @@ data class VoicePreset(
     val isSystem: Boolean = referenceWav == null && speakerEmbeddingPath == null
 }
 
+data class VoiceRecordingState(
+    val isRecording: Boolean = false,
+    val elapsedSeconds: Int = 0,
+    val lastRecordingPath: String? = null
+)
+
 /**
  * ViewModel for managing custom voice presets and speaker embedding extraction.
  */
@@ -47,6 +61,10 @@ class VoicesViewModel : ViewModel() {
     private val storageFile = File(
         File(System.getProperty("user.home"), ".qwen-tts-studio"),
         "voice-presets.tsv"
+    )
+    private val recordingsDir = File(
+        File(System.getProperty("user.home"), ".qwen-tts-studio"),
+        "recordings"
     )
 
     private val _voices = MutableStateFlow(loadVoices())
@@ -69,12 +87,19 @@ class VoicesViewModel : ViewModel() {
     /** The speaker embedding dimension required by the currently loaded model. */
     val currentEmbeddingDim: StateFlow<Int> = _currentEmbeddingDim.asStateFlow()
 
+    private val _recordingState = MutableStateFlow(VoiceRecordingState())
+    val recordingState: StateFlow<VoiceRecordingState> = _recordingState.asStateFlow()
+
     private val qwenEngine = QwenEngine()
     private val nativeDispatcher = Executors.newSingleThreadExecutor { runnable ->
         Thread(null, runnable, "QwenVoicePresetThread", 8L * 1024 * 1024).apply {
             isDaemon = true
         }
     }.asCoroutineDispatcher()
+    private var recordingJob: Job? = null
+    private var recordingTimerJob: Job? = null
+    @Volatile
+    private var recordingLine: TargetDataLine? = null
 
     /**
      * Refreshes model capabilities to update cloning support and embedding dimensions.
@@ -175,6 +200,71 @@ class VoicesViewModel : ViewModel() {
                 _isCreating.value = false
             }
         }
+    }
+
+    fun startRecording() {
+        if (_isCreating.value || _recordingState.value.isRecording) return
+
+        _error.value = null
+        recordingsDir.mkdirs()
+        val outputFile = File(recordingsDir, "recording-${System.currentTimeMillis()}.wav")
+
+        try {
+            val line = openRecordingLine()
+            recordingLine = line
+            line.start()
+            _recordingState.value = VoiceRecordingState(isRecording = true)
+
+            recordingTimerJob = viewModelScope.launch {
+                while (_recordingState.value.isRecording) {
+                    delay(1000)
+                    val state = _recordingState.value
+                    if (state.isRecording) {
+                        _recordingState.value = state.copy(elapsedSeconds = state.elapsedSeconds + 1)
+                    }
+                }
+            }
+
+            recordingJob = viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    AudioInputStream(line).use { stream ->
+                        AudioSystem.write(stream, AudioFileFormat.Type.WAVE, outputFile)
+                    }
+
+                    if (outputFile.isFile && outputFile.length() > 44L) {
+                        _recordingState.value = _recordingState.value.copy(
+                            isRecording = false,
+                            lastRecordingPath = outputFile.absolutePath
+                        )
+                    } else {
+                        outputFile.delete()
+                        _recordingState.value = VoiceRecordingState()
+                        _error.value = "Recording did not produce usable audio."
+                    }
+                } catch (e: Exception) {
+                    outputFile.delete()
+                    if (_recordingState.value.isRecording) {
+                        _error.value = "Recording failed: ${e.message}"
+                    }
+                    _recordingState.value = VoiceRecordingState()
+                } finally {
+                    recordingTimerJob?.cancel()
+                    recordingTimerJob = null
+                    recordingLine = null
+                    runCatching { line.close() }
+                }
+            }
+        } catch (e: Exception) {
+            _recordingState.value = VoiceRecordingState()
+            _error.value = "Could not start microphone recording: ${e.message}"
+        }
+    }
+
+    fun stopRecording() {
+        val line = recordingLine ?: return
+        _recordingState.value = _recordingState.value.copy(isRecording = false)
+        runCatching { line.stop() }
+        runCatching { line.close() }
     }
 
     /**
@@ -287,8 +377,41 @@ class VoicesViewModel : ViewModel() {
         }
     }
 
+    private fun openRecordingLine(): TargetDataLine {
+        val formats = listOf(
+            AudioFormat(16_000f, 16, 1, true, false),
+            AudioFormat(24_000f, 16, 1, true, false),
+            AudioFormat(44_100f, 16, 1, true, false),
+            AudioFormat(48_000f, 16, 1, true, false)
+        )
+
+        for (format in formats) {
+            val info = DataLine.Info(TargetDataLine::class.java, format)
+            runCatching {
+                val line = AudioSystem.getLine(info) as TargetDataLine
+                line.open(format)
+                return line
+            }
+
+            for (mixerInfo in AudioSystem.getMixerInfo()) {
+                runCatching {
+                    val mixer = AudioSystem.getMixer(mixerInfo)
+                    if (!mixer.isLineSupported(info)) return@runCatching
+                    val line = mixer.getLine(info) as TargetDataLine
+                    line.open(format)
+                    return line
+                }
+            }
+        }
+
+        throw IllegalStateException("No supported microphone input line was found.")
+    }
+
     override fun onCleared() {
         super.onCleared()
+        stopRecording()
+        recordingJob?.cancel()
+        recordingTimerJob?.cancel()
         qwenEngine.release()
         nativeDispatcher.close()
     }

@@ -14,6 +14,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -54,6 +56,7 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
     val isCreating by viewModel.isCreating.collectAsState()
     val error by viewModel.error.collectAsState()
     val supportsCloning by viewModel.supportsCloning.collectAsState()
+    val recordingState by viewModel.recordingState.collectAsState()
     val modelDir by settingsViewModel.modelDir.collectAsState()
     val modelName by settingsViewModel.modelName.collectAsState()
     var presetName by remember { mutableStateOf("") }
@@ -68,6 +71,10 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
 
     LaunchedEffect(modelDir, modelName) {
         viewModel.refreshModelCapabilities(modelDir, modelName)
+    }
+
+    LaunchedEffect(recordingState.lastRecordingPath) {
+        recordingState.lastRecordingPath?.let { referencePath = it }
     }
 
     Column(
@@ -103,11 +110,35 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
                         singleLine = true
                     )
                     Button(
-                        onClick = { launcher.launch() }
+                        onClick = { launcher.launch() },
+                        enabled = !recordingState.isRecording
                     ) {
                         Icon(Icons.Default.FolderOpen, contentDescription = null)
                         Spacer(Modifier.size(8.dp))
                         Text("Browse")
+                    }
+                    Button(
+                        onClick = {
+                            if (recordingState.isRecording) {
+                                viewModel.stopRecording()
+                            } else {
+                                viewModel.startRecording()
+                            }
+                        },
+                        enabled = !isCreating
+                    ) {
+                        Icon(
+                            if (recordingState.isRecording) Icons.Default.Stop else Icons.Default.Mic,
+                            contentDescription = null
+                        )
+                        Spacer(Modifier.size(8.dp))
+                        Text(
+                            if (recordingState.isRecording) {
+                                "Stop ${formatRecordingTime(recordingState.elapsedSeconds)}"
+                            } else {
+                                "Record"
+                            }
+                        )
                     }
                 }
                 if (error != null) {
@@ -122,13 +153,17 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
                 }
                 Button(
                     onClick = {
-                        val fallbackName = File(referencePath).nameWithoutExtension
+                        val fallbackName = if (referencePath.contains(".qwen-tts-studio${File.separator}recordings")) {
+                            "Recorded Voice"
+                        } else {
+                            File(referencePath).nameWithoutExtension
+                        }
                         val nameToUse = presetName.ifBlank { fallbackName }
                         viewModel.createVoicePreset(nameToUse, referencePath, modelDir, modelName)
                         presetName = ""
                         referencePath = ""
                     },
-                    enabled = referencePath.isNotBlank() && !isCreating && supportsCloning
+                    enabled = referencePath.isNotBlank() && !isCreating && !recordingState.isRecording && supportsCloning
                 ) {
                     if (isCreating) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -155,6 +190,12 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
             }
         }
     }
+}
+
+private fun formatRecordingTime(seconds: Int): String {
+    val minutes = seconds / 60
+    val secs = seconds % 60
+    return "%d:%02d".format(minutes, secs)
 }
 
 @Composable
