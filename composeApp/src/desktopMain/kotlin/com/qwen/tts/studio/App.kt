@@ -103,12 +103,30 @@ fun App(
                 ) {
                     Spacer(Modifier.height(8.dp))
                     Screen.entries.forEach { screen ->
+                        val selected = currentScreen == screen
                         NavigationRailItem(
-                            selected = currentScreen == screen,
+                            selected = selected,
                             onClick = { currentScreen = screen },
                             icon = { Icon(screen.icon, contentDescription = screen.label) },
-                            label = { Text(screen.label, fontSize = 10.sp) },
-                            alwaysShowLabel = true
+                            label = {
+                                Text(
+                                    screen.label,
+                                    fontSize = 10.sp,
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.onSurface
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
+                                )
+                            },
+                            alwaysShowLabel = true,
+                            colors = NavigationRailItemDefaults.colors(
+                                selectedIconColor = MaterialTheme.colorScheme.onSurface,
+                                selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                                indicatorColor = MaterialTheme.colorScheme.surfaceVariant,
+                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         )
                     }
                     
