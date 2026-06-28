@@ -38,20 +38,35 @@ function Test-JavaHome([string]$JavaHomePath, [switch]$RequireJPackage) {
     return $true
 }
 
+function Get-JavaMajorVersion([string]$JavaHomePath) {
+    if (-not (Test-JavaHome $JavaHomePath)) { return $null }
+
+    try {
+        $versionOutput = & (Join-Path $JavaHomePath "bin\java.exe") "-version" 2>&1 |
+            Select-Object -First 1
+        if ($versionOutput -match '"(\d+)(?:\.|")') {
+            return [int]$Matches[1]
+        }
+    } catch {
+        return $null
+    }
+
+    return $null
+}
+
 function Resolve-JavaHome([switch]$RequireJPackage) {
-    if (Test-JavaHome $env:JAVA_HOME -RequireJPackage:$RequireJPackage) {
-        return $env:JAVA_HOME
+    $candidates = @()
+
+    if (-not [string]::IsNullOrWhiteSpace($env:JAVA_HOME)) {
+        $candidates += $env:JAVA_HOME
     }
 
     $javaCmd = Get-Command java -ErrorAction SilentlyContinue
     if ($javaCmd -and $javaCmd.Path) {
         $javaHome = Split-Path -Parent (Split-Path -Parent $javaCmd.Path)
-        if (Test-JavaHome $javaHome -RequireJPackage:$RequireJPackage) {
-            return $javaHome
-        }
+        $candidates += $javaHome
     }
 
-    $candidates = @()
     $localAppData = [Environment]::GetFolderPath("LocalApplicationData")
     $programFiles = ${env:ProgramFiles}
     $userProfile = $env:USERPROFILE
@@ -62,19 +77,27 @@ function Resolve-JavaHome([switch]$RequireJPackage) {
 
     $gradleJdks = Join-Path $userProfile ".gradle\jdks"
     if (Test-Path $gradleJdks) {
-        $latestGradleJdk = Get-ChildItem $gradleJdks -Directory -ErrorAction SilentlyContinue |
+        $candidates += Get-ChildItem $gradleJdks -Directory -ErrorAction SilentlyContinue |
             Where-Object { Test-JavaHome $_.FullName -RequireJPackage:$RequireJPackage } |
             Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
-        if ($latestGradleJdk) {
-            $candidates += $latestGradleJdk.FullName
-        }
+            ForEach-Object { $_.FullName }
     }
 
-    foreach ($candidate in $candidates) {
-        if (Test-JavaHome $candidate -RequireJPackage:$RequireJPackage) {
-            return $candidate
-        }
+    $validCandidates = $candidates |
+        Where-Object { Test-JavaHome $_ -RequireJPackage:$RequireJPackage } |
+        Select-Object -Unique
+
+    # Compose Desktop currently creates Windows app images with JDK 21 metadata.
+    # Reusing JDK 21 for MSI packaging avoids jpackage app-image version mismatches.
+    $jdk21 = $validCandidates |
+        Where-Object { (Get-JavaMajorVersion $_) -eq 21 } |
+        Select-Object -First 1
+    if ($jdk21) {
+        return $jdk21
+    }
+
+    foreach ($candidate in $validCandidates) {
+        return $candidate
     }
 
     return $null
