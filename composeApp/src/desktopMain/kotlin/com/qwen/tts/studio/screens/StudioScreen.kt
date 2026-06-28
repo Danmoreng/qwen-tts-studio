@@ -59,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.qwen.tts.studio.engine.QwenEngine
 import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import com.qwen.tts.studio.viewmodel.StudioViewModel
 import com.qwen.tts.studio.viewmodel.VoicesViewModel
@@ -283,6 +284,14 @@ fun StudioScreen(
         }
 
         if (uiState.supportsInstruction) {
+            val instructionPlaceholder = when (uiState.modelKind) {
+                QwenEngine.MODEL_KIND_VOICE_DESIGN ->
+                    "Voice design prompt, e.g. Warm baritone narrator with calm studio delivery."
+                QwenEngine.MODEL_KIND_CUSTOM_VOICE ->
+                    "Style instruction, e.g. Whispering, calm, close-mic."
+                else ->
+                    "Instruction, e.g. Calm and natural delivery."
+            }
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -301,7 +310,7 @@ fun StudioScreen(
                     TextField(
                         value = uiState.selectedInstruction,
                         onValueChange = { viewModel.onInstructionChange(it) },
-                        placeholder = { Text("Style instruction, e.g. Whispering, calm, close-mic.") },
+                        placeholder = { Text(instructionPlaceholder) },
                         modifier = Modifier.weight(1f),
                         colors = TextFieldDefaults.colors(
                             focusedContainerColor = Color.Transparent,

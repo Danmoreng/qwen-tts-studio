@@ -9,7 +9,7 @@ Qwen-TTS Studio is a modern desktop application for high-quality, local text-to-
 - **Local Inference:** All processing happens on your machine. No data leaves your computer.
 - **High Performance:** Powered by a native C++ engine with support for CPU and NVIDIA CUDA acceleration.
 - **Voice Cloning:** Create custom voice presets from a short reference audio clip (supported by Base models).
-- **Styled Speech:** Use natural language instructions to control the tone, emotion, and style of the generated speech (supported by CustomVoice models).
+- **Instruction Control:** Use natural language prompts to control voice design, tone, emotion, and style (supported by 1.7B CustomVoice and VoiceDesign models).
 - **Named Speakers:** Built-in support for models with predefined speaker profiles.
 - **Adaptive UI:** The interface automatically adapts to the capabilities of the loaded model.
 - **Cross-Platform:** Built with Compose Multiplatform, supporting Windows and Linux.
