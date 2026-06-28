@@ -239,7 +239,12 @@ if ($Cuda) {
     if ($BundleCudaRuntime) {
         $cudaRuntimeDlls = Find-CudaRuntimeDlls
         foreach ($runtimeDll in $cudaRuntimeDlls) {
-            Copy-Item $runtimeDll.FullName $RepoRoot -Force
+            $destination = Join-Path $RepoRoot $runtimeDll.Name
+            $sourcePath = [System.IO.Path]::GetFullPath($runtimeDll.FullName)
+            $destinationPath = [System.IO.Path]::GetFullPath($destination)
+            if ($sourcePath -ine $destinationPath) {
+                Copy-Item $runtimeDll.FullName $destination -Force
+            }
             $NativeDlls += $runtimeDll.Name
         }
 
