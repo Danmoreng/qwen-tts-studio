@@ -6,7 +6,8 @@ param(
     [switch]$Clean,
     [int]$GradleRetries = 3,
     [switch]$Cuda,
-    [switch]$UseNinja
+    [switch]$UseNinja,
+    [switch]$BundleCudaRuntime
 )
 
 $ErrorActionPreference = "Stop"
@@ -147,6 +148,51 @@ function Add-WixToolsToPath {
     return [bool]($candleTool -and $lightTool)
 }
 
+function Find-CudaRuntimeDlls {
+    $patterns = @("cudart64_*.dll", "cublas64_*.dll", "cublasLt64_*.dll")
+    $searchDirs = @($RepoRoot)
+
+    foreach ($cudaRoot in @($env:CUDA_PATH, $env:CUDAToolkit_ROOT)) {
+        if (-not [string]::IsNullOrWhiteSpace($cudaRoot)) {
+            $searchDirs += (Join-Path $cudaRoot "bin")
+            $searchDirs += (Join-Path $cudaRoot "bin\x64")
+        }
+    }
+
+    $cudaBase = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
+    if (Test-Path $cudaBase) {
+        $searchDirs += Get-ChildItem -Path $cudaBase -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            ForEach-Object {
+                Join-Path $_.FullName "bin"
+                Join-Path $_.FullName "bin\x64"
+            }
+    }
+
+    $runtimeDlls = @()
+    foreach ($pattern in $patterns) {
+        $dll = $null
+        foreach ($dir in ($searchDirs | Select-Object -Unique)) {
+            if (-not (Test-Path $dir)) {
+                continue
+            }
+
+            $dll = Get-ChildItem -Path $dir -Filter $pattern -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 1
+            if ($dll) {
+                break
+            }
+        }
+
+        if ($dll) {
+            $runtimeDlls += $dll
+        }
+    }
+
+    return $runtimeDlls
+}
+
 if (-not (Test-Path $GradleWrapper)) {
     throw "gradlew.bat not found at $GradleWrapper"
 }
@@ -190,24 +236,35 @@ if ($Cuda) {
 
     $NativeDlls += "ggml-cuda.dll"
 
-    $cudaRuntimeCopied = $false
-    $cudaRuntimePatterns = @("cudart64_*.dll", "cublas64_*.dll", "cublasLt64_*.dll")
-    foreach ($pattern in $cudaRuntimePatterns) {
-        $runtimeDll = Get-ChildItem -Path $RepoRoot -Filter $pattern -File -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
-        if ($runtimeDll) {
+    if ($BundleCudaRuntime) {
+        $cudaRuntimeDlls = Find-CudaRuntimeDlls
+        foreach ($runtimeDll in $cudaRuntimeDlls) {
+            Copy-Item $runtimeDll.FullName $RepoRoot -Force
             $NativeDlls += $runtimeDll.Name
-            $cudaRuntimeCopied = $true
         }
-    }
 
-    if (-not $cudaRuntimeCopied) {
-        Write-Warning "CUDA packaging was requested, but CUDA runtime DLLs were not found in the repo root. The packaged app may require a local CUDA installation on the target machine."
+        if ($cudaRuntimeDlls.Count -eq 0) {
+            Write-Warning "CUDA runtime bundling was requested, but CUDA runtime DLLs were not found. The packaged app may require a local CUDA installation on the target machine."
+        }
+    } else {
+        Write-Host "CUDA runtime DLLs will not be bundled. The target machine must provide CUDA runtime DLLs via CUDA_PATH or PATH." -ForegroundColor Yellow
     }
 }
 $NativeDlls = $NativeDlls | Select-Object -Unique
 Write-Host "Step 3/4: Copy native DLLs into packaged app..." -ForegroundColor Cyan
+
+$staleNativePatterns = @(
+    "qwen3_tts.dll",
+    "ggml*.dll",
+    "cudart64_*.dll",
+    "cublas64_*.dll",
+    "cublasLt64_*.dll"
+)
+foreach ($pattern in $staleNativePatterns) {
+    Get-ChildItem -Path $AppRoot -Filter $pattern -File -ErrorAction SilentlyContinue |
+        Remove-Item -Force
+}
+
 foreach ($dll in $NativeDlls) {
     $src = Join-Path $RepoRoot $dll
     if (-not (Test-Path $src)) {

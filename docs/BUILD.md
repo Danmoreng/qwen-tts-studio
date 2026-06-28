@@ -80,6 +80,15 @@ pwsh -ExecutionPolicy Bypass -File .\scripts\package-windows.ps1 -BuildMsi
 pwsh -ExecutionPolicy Bypass -File .\scripts\package-windows.ps1 -Cuda
 ```
 
+The default CUDA package includes `ggml-cuda.dll` but does not bundle NVIDIA runtime DLLs such as `cublasLt64_13.dll`. The target machine must provide those DLLs through `CUDA_PATH`, `CUDAToolkit_ROOT`, or `PATH`.
+
+**Create Offline CUDA Package:**
+```powershell
+pwsh -ExecutionPolicy Bypass -File .\scripts\package-windows.ps1 -Cuda -BuildMsi -BundleCudaRuntime
+```
+
+This bundles the NVIDIA CUDA runtime DLLs into the app image. It is more portable, but the resulting ZIP/MSI is much larger.
+
 The outputs will be available in `composeApp/build/compose/binaries/main/`.
 
 ### Linux
@@ -95,10 +104,10 @@ The standalone app will be in `composeApp/build/compose/binaries/main/app/qwen-t
 ## Technical Details
 
 ### `scripts/build-native.ps1` (Windows)
-The script resolves a JDK for JNI headers, loads the Visual Studio build environment, configures CMake from the `external/` directory, and builds the `qwen3_tts_shared` target. For CUDA builds, it also bundles the necessary CUDA runtime DLLs.
+The script resolves a JDK for JNI headers, loads the Visual Studio build environment, configures CMake from the `external/` directory, and builds the `qwen3_tts_shared` target.
 
 ### `scripts/package-windows.ps1` (Windows)
-This script automates the entire process: it rebuilds the native backend, calls Gradle to create the app image, and bundles the native libraries and assets into a final package.
+This script automates the entire process: it rebuilds the native backend, calls Gradle to create the app image, and bundles the native libraries and assets into a final package. CUDA runtime DLLs are only included when `-BundleCudaRuntime` is passed.
 
 ## Troubleshooting
 

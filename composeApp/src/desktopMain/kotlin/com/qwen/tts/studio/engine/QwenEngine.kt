@@ -268,15 +268,39 @@ class QwenEngine {
                 "cublasLt64_*.dll"
             )
 
+            val searchDirs = linkedSetOf<File>()
+            searchDirs += root
+            listOf("CUDA_PATH", "CUDAToolkit_ROOT")
+                .mapNotNull { System.getenv(it) }
+                .filter { it.isNotBlank() }
+                .forEach { cudaRoot ->
+                    searchDirs += File(cudaRoot, "bin")
+                    searchDirs += File(cudaRoot, "bin/x64")
+                }
+
+            File("C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA")
+                .listFiles { file -> file.isDirectory }
+                ?.sortedByDescending { it.name }
+                ?.forEach { cudaRoot ->
+                    searchDirs += File(cudaRoot, "bin")
+                    searchDirs += File(cudaRoot, "bin/x64")
+                }
+
             for (pattern in cudaRuntimePatterns) {
-                val runtimeDll = root.listFiles { file ->
-                    file.isFile && wildcardMatches(pattern, file.name)
-                }?.maxByOrNull { it.lastModified() }
+                val runtimeDll = searchDirs
+                    .asSequence()
+                    .filter { it.exists() && it.isDirectory }
+                    .mapNotNull { dir ->
+                        dir.listFiles { file ->
+                            file.isFile && wildcardMatches(pattern, file.name)
+                        }?.maxByOrNull { it.lastModified() }
+                    }
+                    .firstOrNull()
 
                 if (runtimeDll != null) {
                     try {
                         System.load(runtimeDll.absolutePath)
-                        println("[QwenEngine] Loaded CUDA runtime from root: ${runtimeDll.name}")
+                        println("[QwenEngine] Loaded CUDA runtime: ${runtimeDll.absolutePath}")
                     } catch (e: Throwable) {
                         System.err.println("[QwenEngine] Failed to preload CUDA runtime ${runtimeDll.name}: ${e.message}")
                     }
