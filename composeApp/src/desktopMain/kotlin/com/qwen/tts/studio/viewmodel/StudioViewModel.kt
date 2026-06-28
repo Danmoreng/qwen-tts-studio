@@ -114,6 +114,7 @@ class StudioViewModel : ViewModel() {
     private companion object {
         private const val AUDIO_SAMPLE_RATE = 24_000
         private const val PLAYBACK_CHUNK_SAMPLES = 1_024
+        private const val PLAYBACK_BUFFER_SECONDS = 0.5f
     }
 
     private data class StreamingTextSpan(
@@ -529,12 +530,13 @@ class StudioViewModel : ViewModel() {
         val sampleRate = lastGeneratedSampleRate.coerceAtLeast(1)
 
         playbackPaused = false
-        playbackLine?.start()
         if (playbackJob?.isActive == true) {
+            playbackLine?.start()
             _uiState.update { it.copy(isPlaying = true) }
             return
         }
 
+        drainAndClosePlaybackLine()
         playbackJob = viewModelScope.launch(Dispatchers.IO) {
             var line: SourceDataLine? = null
             try {
@@ -552,7 +554,7 @@ class StudioViewModel : ViewModel() {
                 playbackLine = line
 
                 println("[StudioViewModel] Opening audio line...")
-                line.open(format)
+                line.open(format, playbackBufferBytes(format, sampleRate))
                 line.start()
                 println("[StudioViewModel] Audio line started.")
 
@@ -579,12 +581,7 @@ class StudioViewModel : ViewModel() {
                     val chunkSamples = minOf(PLAYBACK_CHUNK_SAMPLES, samples.size - start)
                     if (chunkSamples <= 0) break
 
-                    for (offset in 0 until chunkSamples) {
-                        val sample = (samples[start + offset] * 32767).toInt().coerceIn(-32768, 32767)
-                        val byteIndex = offset * 2
-                        chunkBuffer[byteIndex] = (sample and 0xFF).toByte()
-                        chunkBuffer[byteIndex + 1] = ((sample shr 8) and 0xFF).toByte()
-                    }
+                    fillPcm16(samples, start, chunkSamples, chunkBuffer)
 
                     line.write(chunkBuffer, 0, chunkSamples * 2)
                     playbackPositionSample = start + chunkSamples
@@ -609,6 +606,7 @@ class StudioViewModel : ViewModel() {
             } catch (e: Exception) {
                 System.err.println("[StudioViewModel] Playback failed: ${e.message}")
                 e.printStackTrace()
+                _uiState.update { it.copy(error = "Playback failed: ${e.message}") }
             } finally {
                 runCatching { line?.stop() }
                 runCatching { line?.flush() }
@@ -709,7 +707,7 @@ class StudioViewModel : ViewModel() {
         } else {
             AudioSystem.getLine(info) as SourceDataLine
         }
-        line.open(format)
+        line.open(format, playbackBufferBytes(format, sampleRate.coerceAtLeast(1)))
         line.start()
         playbackLine = line
         return line
@@ -801,6 +799,7 @@ class StudioViewModel : ViewModel() {
             } catch (e: Exception) {
                 System.err.println("[StudioViewModel] Streaming playback failed: ${e.message}")
                 e.printStackTrace()
+                _uiState.update { it.copy(error = "Streaming playback failed: ${e.message}") }
             } finally {
                 runCatching { line?.stop() }
                 runCatching { line?.flush() }
@@ -838,15 +837,25 @@ class StudioViewModel : ViewModel() {
 
     private fun fillPcm16FromStreamingBuffer(startSample: Int, sampleCount: Int, output: ByteArray) {
         synchronized(streamingAudioLock) {
-            for (offset in 0 until sampleCount) {
-                val sample = (streamingAudioBuffer[startSample + offset] * 32767)
-                    .toInt()
-                    .coerceIn(-32768, 32767)
-                val byteIndex = offset * 2
-                output[byteIndex] = (sample and 0xFF).toByte()
-                output[byteIndex + 1] = ((sample shr 8) and 0xFF).toByte()
-            }
+            fillPcm16(streamingAudioBuffer, startSample, sampleCount, output)
         }
+    }
+
+    private fun fillPcm16(samples: FloatArray, startSample: Int, sampleCount: Int, output: ByteArray) {
+        for (offset in 0 until sampleCount) {
+            val sample = (samples[startSample + offset] * 32767)
+                .toInt()
+                .coerceIn(-32768, 32767)
+            val byteIndex = offset * 2
+            output[byteIndex] = (sample and 0xFF).toByte()
+            output[byteIndex + 1] = ((sample shr 8) and 0xFF).toByte()
+        }
+    }
+
+    private fun playbackBufferBytes(format: AudioFormat, sampleRate: Int): Int {
+        val frameSize = format.frameSize.coerceAtLeast(1)
+        val frames = (sampleRate * PLAYBACK_BUFFER_SECONDS).toInt().coerceAtLeast(PLAYBACK_CHUNK_SAMPLES * 2)
+        return frames * frameSize
     }
 
     private fun playbackSpanForSample(sample: Long): StreamingTextSpan? {

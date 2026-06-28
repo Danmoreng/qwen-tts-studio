@@ -10,14 +10,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.math.sqrt
 import javax.sound.sampled.AudioFileFormat
 import javax.sound.sampled.AudioFormat
@@ -107,6 +111,18 @@ class VoicesViewModel : ViewModel() {
     private var recordingTimerJob: Job? = null
     @Volatile
     private var recordingLine: TargetDataLine? = null
+    @Volatile
+    private var recordingProcess: Process? = null
+
+    private companion object {
+        private const val RECORDING_BUFFER_MILLIS = 100
+        private const val MIN_RECORDING_SECONDS = 0.25
+        private const val SILENCE_PEAK_THRESHOLD = 128
+        private const val SILENCE_RMS_THRESHOLD = 8.0
+        private const val PIPEWIRE_SOURCE_RECORDING_VOLUME = 0.05f
+        private const val CLIPPING_SAMPLE_THRESHOLD = 0.01
+        private const val RECORDING_POST_PROCESS_FILTER = "highpass=f=90,lowpass=f=9000,loudnorm=I=-18:TP=-3:LRA=11,aresample=48000"
+    }
 
     /**
      * Refreshes model capabilities to update cloning support and embedding dimensions.
@@ -327,29 +343,57 @@ class VoicesViewModel : ViewModel() {
         recordingsDir.mkdirs()
         val outputFile = File(recordingsDir, "recording-${System.currentTimeMillis()}.wav")
 
+        if (startPipeWireRecording(outputFile)) {
+            return
+        }
+
         try {
             val line = openRecordingLine()
             recordingLine = line
             line.start()
             _recordingState.value = VoiceRecordingState(isRecording = true)
 
-            recordingTimerJob = viewModelScope.launch {
-                while (_recordingState.value.isRecording) {
-                    delay(1000)
-                    val state = _recordingState.value
-                    if (state.isRecording) {
-                        _recordingState.value = state.copy(elapsedSeconds = state.elapsedSeconds + 1)
-                    }
-                }
-            }
+            startRecordingTimer()
 
             recordingJob = viewModelScope.launch(Dispatchers.IO) {
+                val format = line.format
+                val buffer = ByteArray(recordingBufferBytes(format))
+                val captured = ByteArrayOutputStream()
+                var peak = 0
+                var squareSum = 0.0
+                var sampleCount = 0L
+                var clippedSamples = 0L
                 try {
-                    AudioInputStream(line).use { stream ->
-                        AudioSystem.write(stream, AudioFileFormat.Type.WAVE, outputFile)
+                    while (isActive && _recordingState.value.isRecording && line.isOpen) {
+                        val read = line.read(buffer, 0, buffer.size)
+                        if (read <= 0) continue
+
+                        captured.write(buffer, 0, read)
+                        val stats = accumulatePcm16Stats(buffer, read)
+                        peak = maxOf(peak, stats.peak)
+                        squareSum += stats.squareSum
+                        sampleCount += stats.sampleCount
+                        clippedSamples += stats.clippedSamples
                     }
 
-                    if (outputFile.isFile && outputFile.length() > 44L) {
+                    val audioBytes = captured.toByteArray()
+                    val minBytes = (format.frameRate * format.frameSize * MIN_RECORDING_SECONDS)
+                        .toInt()
+                        .coerceAtLeast(format.frameSize)
+                    val rms = if (sampleCount > 0L) kotlin.math.sqrt(squareSum / sampleCount) else 0.0
+                    val clippingRatio = if (sampleCount > 0L) clippedSamples.toDouble() / sampleCount else 0.0
+
+                    if (
+                        audioBytes.size >= minBytes &&
+                        clippingRatio <= CLIPPING_SAMPLE_THRESHOLD &&
+                        !(peak < SILENCE_PEAK_THRESHOLD && rms < SILENCE_RMS_THRESHOLD)
+                    ) {
+                        ByteArrayInputStream(audioBytes).use { input ->
+                            AudioInputStream(input, format, (audioBytes.size / format.frameSize).toLong()).use { stream ->
+                                AudioSystem.write(stream, AudioFileFormat.Type.WAVE, outputFile)
+                            }
+                        }
+                        postProcessRecording(outputFile)
                         _recordingState.value = _recordingState.value.copy(
                             isRecording = false,
                             lastRecordingPath = outputFile.absolutePath
@@ -357,7 +401,13 @@ class VoicesViewModel : ViewModel() {
                     } else {
                         outputFile.delete()
                         _recordingState.value = VoiceRecordingState()
-                        _error.value = "Recording did not produce usable audio."
+                        _error.value = if (audioBytes.size < minBytes) {
+                            "Recording was too short."
+                        } else if (clippingRatio > CLIPPING_SAMPLE_THRESHOLD) {
+                            "Recording is clipping. Lower the system microphone input volume and try again."
+                        } else {
+                            "Recording was silent. Check the selected system microphone input and capture level."
+                        }
                     }
                 } catch (e: Exception) {
                     outputFile.delete()
@@ -369,6 +419,7 @@ class VoicesViewModel : ViewModel() {
                     recordingTimerJob?.cancel()
                     recordingTimerJob = null
                     recordingLine = null
+                    runCatching { line.stop() }
                     runCatching { line.close() }
                 }
             }
@@ -379,10 +430,24 @@ class VoicesViewModel : ViewModel() {
     }
 
     fun stopRecording() {
+        val process = recordingProcess
+        if (process != null) {
+            _recordingState.value = _recordingState.value.copy(isRecording = false)
+            interruptProcess(process)
+            viewModelScope.launch(Dispatchers.IO) {
+                if (!process.waitFor(2, TimeUnit.SECONDS)) {
+                    process.destroy()
+                }
+                if (!process.waitFor(1, TimeUnit.SECONDS)) {
+                    process.destroyForcibly()
+                }
+            }
+            return
+        }
+
         val line = recordingLine ?: return
         _recordingState.value = _recordingState.value.copy(isRecording = false)
         runCatching { line.stop() }
-        runCatching { line.close() }
     }
 
     /**
@@ -790,32 +855,334 @@ class VoicesViewModel : ViewModel() {
 
     private fun openRecordingLine(): TargetDataLine {
         val formats = listOf(
-            AudioFormat(16_000f, 16, 1, true, false),
-            AudioFormat(24_000f, 16, 1, true, false),
             AudioFormat(44_100f, 16, 1, true, false),
-            AudioFormat(48_000f, 16, 1, true, false)
+            AudioFormat(48_000f, 16, 1, true, false),
+            AudioFormat(24_000f, 16, 1, true, false),
+            AudioFormat(16_000f, 16, 1, true, false)
         )
+
+        val mixers = AudioSystem.getMixerInfo()
+            .sortedByDescending(::recordingMixerRank)
 
         for (format in formats) {
             val info = DataLine.Info(TargetDataLine::class.java, format)
-            runCatching {
-                val line = AudioSystem.getLine(info) as TargetDataLine
-                line.open(format)
-                return line
-            }
-
-            for (mixerInfo in AudioSystem.getMixerInfo()) {
+            for (mixerInfo in mixers) {
                 runCatching {
                     val mixer = AudioSystem.getMixer(mixerInfo)
                     if (!mixer.isLineSupported(info)) return@runCatching
                     val line = mixer.getLine(info) as TargetDataLine
-                    line.open(format)
+                    line.open(format, recordingBufferBytes(format))
+                    println("[VoicesViewModel] Recording from mixer: ${mixerInfo.name} (${mixerInfo.description}), format=$format")
                     return line
                 }
+            }
+
+            runCatching {
+                val line = AudioSystem.getLine(info) as TargetDataLine
+                line.open(format, recordingBufferBytes(format))
+                println("[VoicesViewModel] Recording from default input, format=$format")
+                return line
             }
         }
 
         throw IllegalStateException("No supported microphone input line was found.")
+    }
+
+    private fun startPipeWireRecording(outputFile: File): Boolean {
+        if (!isLinux() || !isExecutableOnPath("pw-record")) return false
+
+        val command = listOf(
+            "pw-record",
+            "--rate", "48000",
+            "--channels", "1",
+            "--format", "s16",
+            "--container", "wav",
+            outputFile.absolutePath
+        )
+
+        return runCatching {
+            val previousSourceVolume = lowerDefaultSourceVolumeForRecording()
+            val process = try {
+                ProcessBuilder(command)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .redirectError(ProcessBuilder.Redirect.DISCARD)
+                    .start()
+            } catch (e: Exception) {
+                restoreDefaultSourceVolume(previousSourceVolume)
+                throw e
+            }
+
+            Thread.sleep(150)
+            if (!process.isAlive) {
+                outputFile.delete()
+                restoreDefaultSourceVolume(previousSourceVolume)
+                return@runCatching false
+            }
+
+            println("[VoicesViewModel] Recording through PipeWire: ${command.joinToString(" ")}")
+            recordingProcess = process
+            _recordingState.value = VoiceRecordingState(isRecording = true)
+            startRecordingTimer()
+
+            recordingJob = viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val exitCode = process.waitFor()
+                    val validationError = validateRecordedWav(outputFile)
+
+                    if (validationError == null) {
+                        postProcessRecording(outputFile)
+                        _recordingState.value = VoiceRecordingState(
+                            isRecording = false,
+                            lastRecordingPath = outputFile.absolutePath
+                        )
+                    } else {
+                        outputFile.delete()
+                        _recordingState.value = VoiceRecordingState()
+                        _error.value = if (exitCode == 0 || validationError != "Recording did not produce usable audio.") {
+                            if (exitCode == 0) validationError else "$validationError (pw-record exit code $exitCode)"
+                        } else {
+                            "PipeWire recording failed with exit code $exitCode."
+                        }
+                    }
+                } catch (e: Exception) {
+                    outputFile.delete()
+                    if (_recordingState.value.isRecording) {
+                        _error.value = "PipeWire recording failed: ${e.message}"
+                    }
+                    _recordingState.value = VoiceRecordingState()
+                } finally {
+                    recordingTimerJob?.cancel()
+                    recordingTimerJob = null
+                    recordingProcess = null
+                    restoreDefaultSourceVolume(previousSourceVolume)
+                }
+            }
+
+            true
+        }.getOrDefault(false)
+    }
+
+    private fun startRecordingTimer() {
+        recordingTimerJob?.cancel()
+        recordingTimerJob = viewModelScope.launch {
+            while (_recordingState.value.isRecording) {
+                delay(1000)
+                val state = _recordingState.value
+                if (state.isRecording) {
+                    _recordingState.value = state.copy(elapsedSeconds = state.elapsedSeconds + 1)
+                }
+            }
+        }
+    }
+
+    private fun validateRecordedWav(file: File): String? {
+        if (!file.isFile || file.length() <= 44L) {
+            return "Recording did not produce usable audio."
+        }
+
+        return try {
+            AudioSystem.getAudioInputStream(file).use { input ->
+                val format = input.format
+                if (format.sampleSizeInBits != 16 || format.channels <= 0) {
+                    return null
+                }
+
+                val buffer = ByteArray(recordingBufferBytes(format))
+                var peak = 0
+                var squareSum = 0.0
+                var sampleCount = 0L
+                var clippedSamples = 0L
+                var bytesRead = 0L
+
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    bytesRead += read
+                    val stats = accumulatePcm16Stats(buffer, read)
+                    peak = maxOf(peak, stats.peak)
+                    squareSum += stats.squareSum
+                    sampleCount += stats.sampleCount
+                    clippedSamples += stats.clippedSamples
+                }
+
+                val minBytes = (format.frameRate * format.frameSize * MIN_RECORDING_SECONDS)
+                    .toInt()
+                    .coerceAtLeast(format.frameSize)
+                val rms = if (sampleCount > 0L) kotlin.math.sqrt(squareSum / sampleCount) else 0.0
+
+                when {
+                    bytesRead < minBytes -> "Recording was too short."
+                    sampleCount > 0L && clippedSamples.toDouble() / sampleCount > CLIPPING_SAMPLE_THRESHOLD ->
+                        "Recording is clipping. Lower the system microphone input volume and try again."
+                    peak < SILENCE_PEAK_THRESHOLD && rms < SILENCE_RMS_THRESHOLD ->
+                        "Recording was silent. Check the selected system microphone input and capture level."
+                    else -> null
+                }
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun postProcessRecording(file: File) {
+        if (!isLinux() || !isExecutableOnPath("ffmpeg") || !file.isFile) return
+
+        val processed = File(file.parentFile, "${file.nameWithoutExtension}.processed.wav")
+        val success = runCatching {
+            val process = ProcessBuilder(
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                file.absolutePath,
+                "-af",
+                RECORDING_POST_PROCESS_FILTER,
+                "-ar",
+                "48000",
+                "-ac",
+                "1",
+                "-c:a",
+                "pcm_s16le",
+                processed.absolutePath
+            )
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .start()
+
+            process.waitFor(20, TimeUnit.SECONDS) && process.exitValue() == 0 && processed.length() > 44L
+        }.getOrDefault(false)
+
+        if (success) {
+            if (!processed.renameTo(file)) {
+                runCatching {
+                    processed.copyTo(file, overwrite = true)
+                    processed.delete()
+                }
+            }
+        } else {
+            processed.delete()
+        }
+    }
+
+    private fun lowerDefaultSourceVolumeForRecording(): Float? {
+        if (!isLinux() || !isExecutableOnPath("wpctl")) return null
+
+        val previous = readDefaultSourceVolume() ?: return null
+        val target = minOf(previous, PIPEWIRE_SOURCE_RECORDING_VOLUME)
+        if (target < previous) {
+            setDefaultSourceVolume(target)
+            println("[VoicesViewModel] Lowered PipeWire source volume from $previous to $target for recording.")
+        }
+        return previous
+    }
+
+    private fun restoreDefaultSourceVolume(previous: Float?) {
+        if (previous == null || !isLinux() || !isExecutableOnPath("wpctl")) return
+        setDefaultSourceVolume(previous)
+    }
+
+    private fun readDefaultSourceVolume(): Float? {
+        return runCatching {
+            val process = ProcessBuilder("wpctl", "get-volume", "@DEFAULT_AUDIO_SOURCE@")
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .start()
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            if (!process.waitFor(1, TimeUnit.SECONDS) || process.exitValue() != 0) return@runCatching null
+            Regex("""Volume:\s*([0-9]+(?:\.[0-9]+)?)""")
+                .find(output)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toFloatOrNull()
+        }.getOrNull()
+    }
+
+    private fun setDefaultSourceVolume(volume: Float) {
+        runCatching {
+            ProcessBuilder("wpctl", "set-volume", "@DEFAULT_AUDIO_SOURCE@", volume.coerceIn(0f, 1f).toString())
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .start()
+                .waitFor(1, TimeUnit.SECONDS)
+        }
+    }
+
+    private fun isLinux(): Boolean {
+        return System.getProperty("os.name").lowercase().contains("linux")
+    }
+
+    private fun isExecutableOnPath(name: String): Boolean {
+        return System.getenv("PATH")
+            ?.split(File.pathSeparator)
+            ?.any { File(it, name).canExecute() }
+            ?: false
+    }
+
+    private fun interruptProcess(process: Process) {
+        if (!isLinux()) {
+            process.destroy()
+            return
+        }
+
+        val interrupted = runCatching {
+            ProcessBuilder("kill", "-INT", process.pid().toString())
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .start()
+                .waitFor(500, TimeUnit.MILLISECONDS)
+        }.getOrDefault(false)
+
+        if (!interrupted) {
+            process.destroy()
+        }
+    }
+
+    private fun recordingMixerRank(info: javax.sound.sampled.Mixer.Info): Int {
+        val text = "${info.name} ${info.description}".lowercase()
+        var score = 0
+        if (text.contains("generic") || text.contains("analog")) score += 100
+        if (text.contains("mic") || text.contains("capture") || text.contains("input")) score += 50
+        if (text.contains("default") || text.contains("pulse") || text.contains("pipewire")) score += 40
+        if (text.contains("monitor") || text.contains("loopback")) score -= 100
+        if (text.contains("hdmi") || text.contains("nvidia")) score -= 50
+        if (text.contains("port ")) score -= 25
+        return score
+    }
+
+    private fun recordingBufferBytes(format: AudioFormat): Int {
+        val frameSize = format.frameSize.coerceAtLeast(1)
+        val frames = (format.frameRate * RECORDING_BUFFER_MILLIS / 1000)
+            .toInt()
+            .coerceAtLeast(1024)
+        return frames * frameSize
+    }
+
+    private data class PcmStats(
+        val peak: Int,
+        val squareSum: Double,
+        val sampleCount: Long,
+        val clippedSamples: Long
+    )
+
+    private fun accumulatePcm16Stats(bytes: ByteArray, byteCount: Int): PcmStats {
+        var peak = 0
+        var squareSum = 0.0
+        var sampleCount = 0L
+        var clippedSamples = 0L
+        var i = 0
+        while (i + 1 < byteCount) {
+            val sample = ((bytes[i + 1].toInt() shl 8) or (bytes[i].toInt() and 0xFF)).toShort().toInt()
+            val abs = kotlin.math.abs(sample)
+            peak = maxOf(peak, abs)
+            squareSum += sample.toDouble() * sample.toDouble()
+            if (abs >= 32760) {
+                clippedSamples++
+            }
+            sampleCount++
+            i += 2
+        }
+        return PcmStats(peak, squareSum, sampleCount, clippedSamples)
     }
 
     override fun onCleared() {
