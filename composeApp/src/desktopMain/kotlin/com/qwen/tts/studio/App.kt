@@ -1,6 +1,6 @@
 package com.qwen.tts.studio
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -10,8 +10,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -85,75 +85,54 @@ fun App(
                 return@Surface
             }
 
-            Row(modifier = Modifier.fillMaxSize()) {
-                // Navigation Rail
-                NavigationRail(
-                    modifier = Modifier.width(80.dp),
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    header = {
-                        Box(
-                            modifier = Modifier
-                                .padding(vertical = 16.dp)
-                                .size(48.dp)
-                                .background(MaterialTheme.colorScheme.primary, shape = MaterialTheme.shapes.medium),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                "Q3",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 18.sp
+            Column(modifier = Modifier.fillMaxSize()) {
+                Header(currentScreen)
+
+                Row(modifier = Modifier.fillMaxSize()) {
+                    NavigationRail(
+                        modifier = Modifier.width(80.dp),
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ) {
+                        Spacer(Modifier.height(12.dp))
+                        Screen.entries.forEach { screen ->
+                            val selected = currentScreen == screen
+                            NavigationRailItem(
+                                selected = selected,
+                                onClick = { currentScreen = screen },
+                                icon = { Icon(screen.icon, contentDescription = screen.label) },
+                                label = {
+                                    Text(
+                                        screen.label,
+                                        fontSize = 10.sp,
+                                        color = if (selected) {
+                                            MaterialTheme.colorScheme.onSurface
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        }
+                                    )
+                                },
+                                alwaysShowLabel = true,
+                                colors = NavigationRailItemDefaults.colors(
+                                    selectedIconColor = MaterialTheme.colorScheme.onSurface,
+                                    selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                                    indicatorColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             )
                         }
-                    }
-                ) {
-                    Spacer(Modifier.height(8.dp))
-                    Screen.entries.forEach { screen ->
-                        val selected = currentScreen == screen
-                        NavigationRailItem(
-                            selected = selected,
-                            onClick = { currentScreen = screen },
-                            icon = { Icon(screen.icon, contentDescription = screen.label) },
-                            label = {
-                                Text(
-                                    screen.label,
-                                    fontSize = 10.sp,
-                                    color = if (selected) {
-                                        MaterialTheme.colorScheme.onSurface
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    }
-                                )
-                            },
-                            alwaysShowLabel = true,
-                            colors = NavigationRailItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.onSurface,
-                                selectedTextColor = MaterialTheme.colorScheme.onSurface,
-                                indicatorColor = MaterialTheme.colorScheme.surfaceVariant,
-                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+
+                        Spacer(Modifier.weight(1f))
+
+                        IconButton(onClick = onThemeToggle) {
+                            Icon(
+                                if (isDarkMode) Icons.Default.LightMode else Icons.Default.DarkMode,
+                                contentDescription = "Toggle Theme"
                             )
-                        )
+                        }
+                        Spacer(Modifier.height(16.dp))
                     }
-                    
-                    Spacer(Modifier.weight(1f))
-                    
-                    // Theme Toggle
-                    IconButton(onClick = onThemeToggle) {
-                        Icon(
-                            if (isDarkMode) Icons.Default.LightMode else Icons.Default.DarkMode,
-                            contentDescription = "Toggle Theme"
-                        )
-                    }
-                    Spacer(Modifier.height(16.dp))
-                }
 
-                // Main Content
-                Column(modifier = Modifier.fillMaxSize()) {
-                    // Header
-                    Header(currentScreen)
-
-                    // Screen Content
                     Box(modifier = Modifier.fillMaxSize()) {
                         when (currentScreen) {
                             Screen.Studio -> StudioScreen(studioViewModel, settingsViewModel, voicesViewModel)
@@ -181,10 +160,20 @@ fun Header(screen: Screen) {
         tonalElevation = 1.dp
     ) {
         Row(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp),
+            modifier = Modifier.fillMaxSize(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
         ) {
+            Box(
+                modifier = Modifier.width(80.dp).fillMaxHeight(),
+                contentAlignment = Alignment.Center
+            ) {
+                Image(
+                    painter = painterResource("icons/app-icon-ui.svg"),
+                    contentDescription = "Qwen-TTS Studio",
+                    modifier = Modifier.size(56.dp)
+                )
+            }
+
             Text(
                 text = when (screen) {
                     Screen.Studio -> "Speech Synthesis"
@@ -192,6 +181,7 @@ fun Header(screen: Screen) {
                     Screen.VoiceLab -> "Voice Lab"
                     Screen.Setup -> "Model Settings"
                 },
+                modifier = Modifier.padding(horizontal = 24.dp),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold
             )
