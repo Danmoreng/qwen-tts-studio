@@ -2,7 +2,6 @@ package com.qwen.tts.studio.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,7 +15,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FolderOpen
@@ -25,8 +23,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -124,7 +120,6 @@ fun WelcomeSetupScreen(
 @Composable
 fun SetupScreen(viewModel: SettingsViewModel) {
     val modelDir by viewModel.modelDir.collectAsState()
-    val modelName by viewModel.modelName.collectAsState()
     val availableModelNames by viewModel.availableModelNames.collectAsState()
 
     LaunchedEffect(modelDir) {
@@ -151,60 +146,14 @@ fun SetupScreen(viewModel: SettingsViewModel) {
 
                     ModelDirectorySection(viewModel)
 
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Model File Name", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(
-                            "Pick a Serveurperso qwen-talker GGUF model file.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                        )
-                        OutlinedTextField(
-                            value = modelName,
-                            onValueChange = { viewModel.setModelName(it) },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            placeholder = { Text("qwen-talker-0.6b-base-Q8_0.gguf") },
-                            shape = MaterialTheme.shapes.medium
-                        )
-
-                        if (availableModelNames.isNotEmpty()) {
-                            var modelExpanded by remember { mutableStateOf(false) }
-                            Box {
-                                OutlinedCard(
-                                    onClick = { modelExpanded = true },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text("Choose detected model file")
-                                        Spacer(Modifier.weight(1f))
-                                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
-                                    }
-                                }
-                                DropdownMenu(
-                                    expanded = modelExpanded,
-                                    onDismissRequest = { modelExpanded = false }
-                                ) {
-                                    availableModelNames.forEach { fileName ->
-                                        DropdownMenuItem(
-                                            text = { Text(fileName) },
-                                            onClick = {
-                                                viewModel.setModelName(fileName)
-                                                modelExpanded = false
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-
                     HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outlineVariant)
 
                     Text(
-                        "Features such as instructions, named speakers, and cloning are detected from the loaded model.",
+                        if (availableModelNames.isEmpty()) {
+                            "No qwen-talker GGUF models detected in this folder yet."
+                        } else {
+                            "${availableModelNames.size} qwen-talker GGUF model${if (availableModelNames.size == 1) "" else "s"} detected. Select the active model in Studio."
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -262,7 +211,7 @@ private fun ModelDownloadSection(viewModel: SettingsViewModel) {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
-        Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Icon(Icons.Default.CloudDownload, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Column(modifier = Modifier.weight(1f)) {
@@ -355,29 +304,42 @@ private fun DownloadOptionRow(
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Checkbox(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(option.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                Text(option.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(formatBytes(option.totalSizeBytes), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
-                Text("${option.files.size} files", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        option.title,
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(formatBytes(option.totalSizeBytes), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Text("${option.files.size} files", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 Text(
-                    if (installed) "Installed" else "Not installed",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (installed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    option.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-                if (installed) {
-                    TextButton(onClick = onUninstall, enabled = enabled) {
-                        Icon(Icons.Default.Delete, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Delete")
-                    }
+            }
+            Text(
+                if (installed) "Installed" else "Not installed",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (installed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (installed) {
+                TextButton(onClick = onUninstall, enabled = enabled) {
+                    Icon(Icons.Default.Delete, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Delete")
                 }
             }
         }
