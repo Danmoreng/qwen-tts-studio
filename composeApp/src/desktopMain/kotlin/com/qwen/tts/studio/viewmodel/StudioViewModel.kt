@@ -198,17 +198,14 @@ class StudioViewModel : ViewModel() {
                     val latestState = _uiState.value
                     val langId = QwenEngine.mapLanguageToId(latestState.selectedLanguage)
                     val selectedSpeaker = latestState.selectedSpeaker.takeIf { it.isNotBlank() }
-                    val effectiveSpeaker = if (
-                        latestState.supportsNamedSpeakers &&
-                        speakerEmbeddingPath.isNullOrBlank() &&
-                        referenceWav.isNullOrBlank()
-                    ) {
+                    val useNamedSpeaker = latestState.supportsNamedSpeakers && selectedSpeaker != null
+                    val effectiveSpeaker = if (useNamedSpeaker) {
                         selectedSpeaker ?: latestState.availableSpeakers.firstOrNull()
                     } else {
                         null
                     }
-                    val effectiveEmbedding = if (latestState.supportsCloning) speakerEmbeddingPath else null
-                    val effectiveReference = if (latestState.supportsCloning) referenceWav else null
+                    val effectiveEmbedding = if (latestState.supportsCloning && !useNamedSpeaker) speakerEmbeddingPath else null
+                    val effectiveReference = if (latestState.supportsCloning && !useNamedSpeaker) referenceWav else null
                     val effectiveInstruction = if (latestState.supportsInstruction) {
                         latestState.selectedInstruction.takeIf { it.isNotBlank() }
                     } else {

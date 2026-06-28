@@ -356,12 +356,13 @@ fun StudioScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    val speakerEmbeddingPath = if (uiState.supportsCloning) {
+                    val useNamedSpeaker = uiState.supportsNamedSpeakers && uiState.selectedSpeaker.isNotBlank()
+                    val speakerEmbeddingPath = if (uiState.supportsCloning && !useNamedSpeaker) {
                         voicesViewModel.speakerEmbeddingForVoice(uiState.selectedVoice, uiState.speakerEmbeddingDim)
                     } else {
                         null
                     }
-                    val referenceWav = if (uiState.supportsCloning) {
+                    val referenceWav = if (uiState.supportsCloning && !useNamedSpeaker) {
                         voicesViewModel.referenceForVoice(uiState.selectedVoice)
                     } else {
                         null
