@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.qwen.tts.studio.screens.SetupScreen
 import com.qwen.tts.studio.screens.StudioScreen
+import com.qwen.tts.studio.screens.VoiceLabScreen
 import com.qwen.tts.studio.screens.VoicesScreen
 import com.qwen.tts.studio.screens.WelcomeSetupScreen
 import com.qwen.tts.studio.theme.AppTheme
@@ -37,6 +38,7 @@ import com.qwen.tts.studio.viewmodel.VoicesViewModel
 enum class Screen(val label: String, val icon: ImageVector) {
     Studio("Studio", Icons.AutoMirrored.Filled.VolumeUp),
     Voices("Voices", Icons.Default.Mic),
+    VoiceLab("Lab", Icons.Default.Tune),
     Setup("Setup", Icons.Default.Settings)
 }
 
@@ -132,6 +134,7 @@ fun App(
                         when (currentScreen) {
                             Screen.Studio -> StudioScreen(studioViewModel, settingsViewModel, voicesViewModel)
                             Screen.Voices -> VoicesScreen(voicesViewModel, settingsViewModel)
+                            Screen.VoiceLab -> VoiceLabScreen(voicesViewModel)
                             Screen.Setup -> SetupScreen(settingsViewModel)
                         }
                     }
@@ -162,6 +165,7 @@ fun Header(screen: Screen) {
                 text = when (screen) {
                     Screen.Studio -> "Speech Synthesis"
                     Screen.Voices -> "Voice Cloning"
+                    Screen.VoiceLab -> "Voice Lab"
                     Screen.Setup -> "Model Settings"
                 },
                 style = MaterialTheme.typography.titleLarge,

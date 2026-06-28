@@ -13,9 +13,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 import java.util.concurrent.Executors
+import kotlin.math.sqrt
 import javax.sound.sampled.AudioFileFormat
 import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioInputStream
@@ -45,6 +48,11 @@ data class VoiceRecordingState(
     val isRecording: Boolean = false,
     val elapsedSeconds: Int = 0,
     val lastRecordingPath: String? = null
+)
+
+data class EmbeddingBlendSource(
+    val voiceId: String,
+    val weight: Float
 )
 
 /**
@@ -420,6 +428,96 @@ class VoicesViewModel : ViewModel() {
         return speakerEmbeddingForVoice(name, expectedDim) != null
     }
 
+    fun createMixedVoicePreset(
+        name: String,
+        sources: List<EmbeddingBlendSource>,
+        normalize: Boolean
+    ) {
+        if (_isCreating.value) return
+
+        val trimmedName = name.trim()
+        if (trimmedName.isBlank()) {
+            _error.value = "Preset name is required."
+            return
+        }
+
+        val activeSources = sources.filter { it.weight > 0f }
+        if (activeSources.map { it.voiceId }.distinct().size < 2) {
+            _error.value = "Select at least two voices."
+            return
+        }
+
+        _isCreating.value = true
+        _error.value = null
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val presetsById = _voices.value.associateBy { it.id }
+                val selectedPresets = mutableListOf<Pair<Float, VoicePreset>>()
+
+                for (source in activeSources) {
+                    val preset = presetsById[source.voiceId]
+                    if (preset == null || preset.isSystem) {
+                        _error.value = "Only custom speaker presets can be mixed."
+                        return@launch
+                    }
+
+                    selectedPresets += source.weight to preset
+                }
+
+                val commonDims = selectedPresets
+                    .map { (_, preset) -> preset.speakerEmbeddings.keys }
+                    .reduce { acc, dims -> acc.intersect(dims) }
+                    .filter { it == 1024 || it == 2048 }
+                    .sorted()
+
+                if (commonDims.isEmpty()) {
+                    _error.value = "Selected voices do not share a speaker embedding dimension."
+                    return@launch
+                }
+
+                val voiceId = "voice-${System.currentTimeMillis()}"
+                val embeddingsDir = embeddingsDirectory().apply { mkdirs() }
+                val mixedEmbeddings = sortedMapOf<Int, String>()
+
+                for (dim in commonDims) {
+                    val vectors = mutableListOf<Pair<Float, FloatArray>>()
+                    for ((weight, preset) in selectedPresets) {
+                        val path = preset.speakerEmbeddings[dim]
+                            ?: throw IllegalArgumentException("${preset.name} has no D$dim embedding.")
+                        val vector = loadSpeakerEmbedding(path)
+                        if (vector.size != dim) {
+                            throw IllegalArgumentException(
+                                "${preset.name} has a ${vector.size}-value embedding, expected D$dim."
+                            )
+                        }
+                        vectors += weight to vector
+                    }
+
+                    val mixed = mixSpeakerEmbeddings(vectors, normalize)
+                    val embeddingFile = File(embeddingsDir, "$voiceId-d$dim.json")
+                    saveSpeakerEmbeddingJson(embeddingFile, mixed)
+                    mixedEmbeddings[dim] = embeddingFile.absolutePath
+                }
+
+                val preset = VoicePreset(
+                    id = voiceId,
+                    name = makeUniqueName(trimmedName),
+                    referenceWav = null,
+                    speakerEmbeddings = mixedEmbeddings
+                )
+
+                _voices.value = _voices.value + preset
+                saveVoices()
+                _error.value = null
+            } catch (e: Exception) {
+                _error.value = "Failed to create mixed voice: ${e.message}"
+            } finally {
+                _isCreating.value = false
+            }
+        }
+    }
+
     private fun makeUniqueName(baseName: String): String {
         if (_voices.value.none { it.name.equals(baseName, ignoreCase = true) }) {
             return baseName
@@ -606,6 +704,88 @@ class VoicesViewModel : ViewModel() {
         } catch (_: Exception) {
             null
         }
+    }
+
+    private fun loadSpeakerEmbedding(path: String): FloatArray {
+        val file = File(path)
+        if (!file.isFile) throw IllegalArgumentException("Embedding file does not exist.")
+        val bytes = file.readBytes()
+        if (bytes.isEmpty()) throw IllegalArgumentException("Embedding file is empty.")
+
+        val textLike = file.extension.equals("json", ignoreCase = true) ||
+            bytes.any { it == '['.code.toByte() }
+
+        return if (textLike) {
+            Regex("""[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?""")
+                .findAll(String(bytes, StandardCharsets.UTF_8))
+                .map { it.value.toFloat() }
+                .toList()
+                .toFloatArray()
+        } else {
+            if (bytes.size % 4 != 0) {
+                throw IllegalArgumentException("Binary embedding size is not divisible by 4.")
+            }
+            val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+            FloatArray(bytes.size / 4) { buffer.float }
+        }
+    }
+
+    private fun mixSpeakerEmbeddings(
+        weightedVectors: List<Pair<Float, FloatArray>>,
+        normalize: Boolean
+    ): FloatArray {
+        val dim = weightedVectors.first().second.size
+        val sum = DoubleArray(dim)
+        var weightSum = 0.0
+        var normSum = 0.0
+
+        weightedVectors.forEach { (weightFloat, vector) ->
+            if (vector.size != dim) throw IllegalArgumentException("Embedding dimensions do not match.")
+            val weight = weightFloat.toDouble()
+            weightSum += weight
+            normSum += l2Norm(vector) * weight
+            for (i in 0 until dim) {
+                sum[i] += vector[i].toDouble() * weight
+            }
+        }
+
+        if (weightSum <= 0.0) throw IllegalArgumentException("Weights must be positive.")
+        val mixed = FloatArray(dim) { i -> (sum[i] / weightSum).toFloat() }
+
+        if (normalize) {
+            val targetNorm = normSum / weightSum
+            val mixedNorm = l2Norm(mixed)
+            if (targetNorm > 0.0 && mixedNorm > 0.0) {
+                val scale = targetNorm / mixedNorm
+                for (i in mixed.indices) {
+                    mixed[i] = (mixed[i] * scale).toFloat()
+                }
+            }
+        }
+
+        if (mixed.any { !it.isFinite() }) {
+            throw IllegalArgumentException("Mixed embedding contains invalid values.")
+        }
+        return mixed
+    }
+
+    private fun l2Norm(vector: FloatArray): Double {
+        var sum = 0.0
+        for (value in vector) {
+            sum += value.toDouble() * value.toDouble()
+        }
+        return sqrt(sum)
+    }
+
+    private fun saveSpeakerEmbeddingJson(file: File, embedding: FloatArray) {
+        file.writeText(
+            embedding.joinToString(
+                separator = ",\n",
+                prefix = "[\n  ",
+                postfix = "\n]"
+            ) { it.toString() },
+            StandardCharsets.UTF_8
+        )
     }
 
     private fun openRecordingLine(): TargetDataLine {

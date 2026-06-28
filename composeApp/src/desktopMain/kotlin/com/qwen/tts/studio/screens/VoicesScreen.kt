@@ -228,8 +228,10 @@ private fun VoicePresetCard(
                 Text(
                     if (preset.isSystem) {
                         "Built-in model voice"
+                    } else if (preset.referenceWav == null) {
+                        "Generated speaker embedding"
                     } else {
-                        "Reference: ${preset.referenceWav ?: "not available"}"
+                        "Reference: ${preset.referenceWav}"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
