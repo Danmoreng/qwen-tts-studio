@@ -3,9 +3,11 @@ package com.qwen.tts.studio
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -22,7 +24,6 @@ import com.qwen.tts.studio.theme.AppTheme
 import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import com.qwen.tts.studio.viewmodel.StudioViewModel
 import com.qwen.tts.studio.viewmodel.VoicesViewModel
-import org.jetbrains.compose.ui.tooling.preview.Preview
 
 /**
  * Enum representing the different screens in the application.
@@ -34,7 +35,7 @@ import org.jetbrains.compose.ui.tooling.preview.Preview
  * @property icon The icon associated with the screen.
  */
 enum class Screen(val label: String, val icon: ImageVector) {
-    Studio("Studio", Icons.Default.VolumeUp),
+    Studio("Studio", Icons.AutoMirrored.Filled.VolumeUp),
     Voices("Voices", Icons.Default.Mic),
     Setup("Setup", Icons.Default.Settings)
 }

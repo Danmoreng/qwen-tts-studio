@@ -16,6 +16,7 @@ $ComposeAppDir = Join-Path $RepoRoot "composeApp"
 $GradleWrapper = Join-Path $RepoRoot "gradlew.bat"
 $PackageName = "qwen-tts-studio"
 $PackageVersion = if ([string]::IsNullOrWhiteSpace($env:APP_VERSION)) { "1.0.0" } else { $env:APP_VERSION }
+$PreferredJavaMajor = if ([string]::IsNullOrWhiteSpace($env:PACKAGE_JAVA_MAJOR)) { 25 } else { [int]$env:PACKAGE_JAVA_MAJOR }
 
 if ($RequireMsi) {
     $BuildMsi = $true
@@ -87,13 +88,11 @@ function Resolve-JavaHome([switch]$RequireJPackage) {
         Where-Object { Test-JavaHome $_ -RequireJPackage:$RequireJPackage } |
         Select-Object -Unique
 
-    # Compose Desktop currently creates Windows app images with JDK 21 metadata.
-    # Reusing JDK 21 for MSI packaging avoids jpackage app-image version mismatches.
-    $jdk21 = $validCandidates |
-        Where-Object { (Get-JavaMajorVersion $_) -eq 21 } |
+    $preferredJdk = $validCandidates |
+        Where-Object { (Get-JavaMajorVersion $_) -eq $PreferredJavaMajor } |
         Select-Object -First 1
-    if ($jdk21) {
-        return $jdk21
+    if ($preferredJdk) {
+        return $preferredJdk
     }
 
     foreach ($candidate in $validCandidates) {

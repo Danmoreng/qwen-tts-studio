@@ -200,7 +200,7 @@ class StudioViewModel : ViewModel() {
                     val selectedSpeaker = latestState.selectedSpeaker.takeIf { it.isNotBlank() }
                     val useNamedSpeaker = latestState.supportsNamedSpeakers && selectedSpeaker != null
                     val effectiveSpeaker = if (useNamedSpeaker) {
-                        selectedSpeaker ?: latestState.availableSpeakers.firstOrNull()
+                        selectedSpeaker
                     } else {
                         null
                     }
