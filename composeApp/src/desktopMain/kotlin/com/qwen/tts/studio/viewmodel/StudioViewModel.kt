@@ -159,13 +159,11 @@ class StudioViewModel : ViewModel() {
      * @param modelDir Directory containing the models.
      * @param modelName Optional specific model name.
      * @param speakerEmbeddingPath Optional path to a speaker embedding file.
-     * @param referenceWav Optional path to a reference WAV file for cloning.
      */
     fun generateAudio(
         modelDir: String,
         modelName: String?,
-        speakerEmbeddingPath: String?,
-        referenceWav: String?
+        speakerEmbeddingPath: String?
     ) {
         val currentState = _uiState.value
         if (currentState.text.isBlank() || currentState.isGenerating) return
@@ -205,7 +203,6 @@ class StudioViewModel : ViewModel() {
                         null
                     }
                     val effectiveEmbedding = if (latestState.supportsCloning && !useNamedSpeaker) speakerEmbeddingPath else null
-                    val effectiveReference = if (latestState.supportsCloning && !useNamedSpeaker) referenceWav else null
                     val effectiveInstruction = if (latestState.supportsInstruction) {
                         latestState.selectedInstruction.takeIf { it.isNotBlank() }
                     } else {
@@ -215,7 +212,7 @@ class StudioViewModel : ViewModel() {
                     val audio = withContext(nativeDispatcher) {
                         qwenEngine.generate(
                             text = latestState.text,
-                            referenceWav = effectiveReference,
+                            referenceWav = null,
                             speakerEmbeddingPath = effectiveEmbedding,
                             languageId = langId,
                             instruction = effectiveInstruction,

@@ -23,8 +23,10 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -168,7 +170,7 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
                     if (isCreating) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.size(8.dp))
-                        Text("Extracting Embedding...")
+                        Text("Generating Embeddings...")
                     } else {
                         Icon(Icons.Default.Add, contentDescription = null)
                         Spacer(Modifier.size(8.dp))
@@ -185,6 +187,9 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
             items(voices, key = { it.id }) { preset ->
                 VoicePresetCard(
                     preset = preset,
+                    isCreating = isCreating,
+                    modelDir = modelDir,
+                    onGenerateMissing = { dim -> viewModel.createMissingSpeakerEmbedding(preset.id, dim, modelDir) },
                     onDelete = { viewModel.deleteVoicePreset(preset.id) }
                 )
             }
@@ -201,6 +206,9 @@ private fun formatRecordingTime(seconds: Int): String {
 @Composable
 private fun VoicePresetCard(
     preset: VoicePreset,
+    isCreating: Boolean,
+    modelDir: String,
+    onGenerateMissing: (Int) -> Unit,
     onDelete: () -> Unit
 ) {
     Card(
@@ -211,17 +219,45 @@ private fun VoicePresetCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(preset.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Text(
-                    if (preset.isSystem) "Built-in model voice" else "Embedding: ${preset.speakerEmbeddingPath}",
+                    if (preset.isSystem) {
+                        "Built-in model voice"
+                    } else {
+                        "Reference: ${preset.referenceWav ?: "not available"}"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (!preset.isSystem) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        listOf(1024, 2048).forEach { dim ->
+                            val exists = preset.speakerEmbeddings.containsKey(dim)
+                            if (exists) {
+                                OutlinedButton(
+                                    onClick = {},
+                                    enabled = false,
+                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text("D$dim ready")
+                                }
+                            } else {
+                                TextButton(
+                                    onClick = { onGenerateMissing(dim) },
+                                    enabled = !isCreating && modelDir.isNotBlank(),
+                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text("Generate D$dim")
+                                }
+                            }
+                        }
+                    }
+                }
             }
             if (!preset.isSystem) {
                 IconButton(onClick = onDelete) {

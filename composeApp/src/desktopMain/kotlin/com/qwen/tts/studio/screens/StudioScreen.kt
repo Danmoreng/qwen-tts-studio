@@ -84,6 +84,7 @@ fun StudioScreen(
     val modelName by settingsViewModel.modelName.collectAsState()
     val availableModelNames by settingsViewModel.availableModelNames.collectAsState()
     val voices by voicesViewModel.voices.collectAsState()
+    val isCreatingVoice by voicesViewModel.isCreating.collectAsState()
 
     val saverLauncher = rememberFileSaverLauncher { file ->
         file?.path?.let { viewModel.saveAudioToFile(java.io.File(it)) }
@@ -371,15 +372,49 @@ fun StudioScreen(
                     } else {
                         null
                     }
-                    val referenceWav = if (uiState.supportsCloning && !useNamedSpeaker) {
-                        voicesViewModel.referenceForVoice(uiState.selectedVoice)
-                    } else {
-                        null
+                    val selectedVoicePreset = voices.firstOrNull { it.name == uiState.selectedVoice }
+                    val missingSpeakerEmbedding = uiState.supportsCloning &&
+                        !useNamedSpeaker &&
+                        selectedVoicePreset?.isSystem == false &&
+                        uiState.speakerEmbeddingDim > 0 &&
+                        speakerEmbeddingPath == null
+
+                    if (missingSpeakerEmbedding) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "D${uiState.speakerEmbeddingDim} embedding is missing for ${uiState.selectedVoice}.",
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedButton(
+                                onClick = {
+                                    voicesViewModel.createMissingSpeakerEmbedding(
+                                        uiState.selectedVoice,
+                                        uiState.speakerEmbeddingDim,
+                                        modelDir
+                                    )
+                                },
+                                enabled = !isCreatingVoice
+                            ) {
+                                if (isCreatingVoice) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Generating...")
+                                } else {
+                                    Text("Generate D${uiState.speakerEmbeddingDim}")
+                                }
+                            }
+                        }
                     }
 
                     Button(
-                        onClick = { viewModel.generateAudio(modelDir, modelName, speakerEmbeddingPath, referenceWav) },
-                        enabled = uiState.text.isNotBlank() && !uiState.isGenerating,
+                        onClick = { viewModel.generateAudio(modelDir, modelName, speakerEmbeddingPath) },
+                        enabled = uiState.text.isNotBlank() && !uiState.isGenerating && !missingSpeakerEmbedding,
                         contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
                     ) {
                         if (uiState.isGenerating) {
