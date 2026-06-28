@@ -211,10 +211,7 @@ class VoicesViewModel : ViewModel() {
         val preset = _voices.value.firstOrNull { it.name == name } ?: return null
         val embedding = preset.speakerEmbeddingPath ?: return null
         if (expectedDim <= 0) return embedding
-        val dim = preset.embeddingDim
-        if (dim == null) {
-            return null
-        }
+        val dim = preset.embeddingDim ?: inferSpeakerEmbeddingDim(embedding) ?: return null
         return if (dim == expectedDim) embedding else null
     }
 
@@ -246,7 +243,7 @@ class VoicesViewModel : ViewModel() {
                     if (parts.size >= 4) {
                         val embedding = parts[2].ifBlank { null }
                         val wav = parts[3].ifBlank { null }
-                        val dim = parts.getOrNull(4)?.toIntOrNull()
+                        val dim = parts.getOrNull(4)?.toIntOrNull() ?: embedding?.let(::inferSpeakerEmbeddingDim)
                         VoicePreset(id = id, name = name, referenceWav = wav, speakerEmbeddingPath = embedding, embeddingDim = dim)
                     } else {
                         val wav = parts.getOrNull(2).orEmpty()
@@ -268,6 +265,26 @@ class VoicesViewModel : ViewModel() {
                 "${it.id}\t${it.name}\t${it.speakerEmbeddingPath.orEmpty()}\t${it.referenceWav.orEmpty()}\t${it.embeddingDim?.toString().orEmpty()}"
             }
         storageFile.writeText(lines.joinToString(System.lineSeparator()))
+    }
+
+    private fun inferSpeakerEmbeddingDim(path: String): Int? {
+        val file = File(path)
+        if (!file.exists() || !file.isFile) return null
+
+        return try {
+            if (file.extension.equals("json", ignoreCase = true)) {
+                val text = file.readText()
+                Regex("""[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?""")
+                    .findAll(text)
+                    .count()
+                    .takeIf { it > 0 }
+            } else {
+                val bytes = file.length()
+                if (bytes > 0L && bytes % 4L == 0L) (bytes / 4L).toInt() else null
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     override fun onCleared() {

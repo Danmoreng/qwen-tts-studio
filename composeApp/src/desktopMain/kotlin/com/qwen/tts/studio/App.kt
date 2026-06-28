@@ -17,6 +17,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.qwen.tts.studio.screens.SetupScreen
 import com.qwen.tts.studio.screens.StudioScreen
 import com.qwen.tts.studio.screens.VoicesScreen
+import com.qwen.tts.studio.screens.WelcomeSetupScreen
 import com.qwen.tts.studio.theme.AppTheme
 import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import com.qwen.tts.studio.viewmodel.StudioViewModel
@@ -57,12 +58,24 @@ fun App(
     val settingsViewModel: SettingsViewModel = viewModel { SettingsViewModel() }
     val studioViewModel: StudioViewModel = viewModel { StudioViewModel() }
     val voicesViewModel: VoicesViewModel = viewModel { VoicesViewModel() }
+    val showWelcome by settingsViewModel.showWelcome.collectAsState()
 
     AppTheme(darkTheme = isDarkMode) {
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background
         ) {
+            if (showWelcome) {
+                WelcomeSetupScreen(
+                    viewModel = settingsViewModel,
+                    onContinue = {
+                        settingsViewModel.dismissWelcome()
+                        currentScreen = Screen.Studio
+                    }
+                )
+                return@Surface
+            }
+
             Row(modifier = Modifier.fillMaxSize()) {
                 // Navigation Rail
                 NavigationRail(

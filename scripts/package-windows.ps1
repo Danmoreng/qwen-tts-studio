@@ -1,6 +1,9 @@
 param(
     [string]$Configuration = "Release",
     [switch]$BuildMsi,
+    [switch]$RequireMsi,
+    [switch]$SkipNativeBuild,
+    [switch]$Clean,
     [int]$GradleRetries = 3,
     [switch]$Cuda,
     [switch]$UseNinja
@@ -11,6 +14,12 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $ComposeAppDir = Join-Path $RepoRoot "composeApp"
 $GradleWrapper = Join-Path $RepoRoot "gradlew.bat"
+$PackageName = "qwen-tts-studio"
+$PackageVersion = if ([string]::IsNullOrWhiteSpace($env:APP_VERSION)) { "1.0.0" } else { $env:APP_VERSION }
+
+if ($RequireMsi) {
+    $BuildMsi = $true
+}
 
 function Test-JavaHome([string]$JavaHomePath, [switch]$RequireJPackage) {
     if ([string]::IsNullOrWhiteSpace($JavaHomePath)) { return $false }
@@ -93,6 +102,29 @@ function Invoke-Gradle([string[]]$Tasks, [int]$Retries = 1) {
     throw "Gradle failed (exit code $LASTEXITCODE): $($Tasks -join ' ')"
 }
 
+function Add-WixToolsToPath {
+    $candidateDirs = @(
+        (Join-Path $RepoRoot "build\wix311"),
+        (Join-Path $ComposeAppDir "build\wix311")
+    )
+
+    foreach ($dir in $candidateDirs) {
+        if ((Test-Path (Join-Path $dir "wix.exe")) -or
+            ((Test-Path (Join-Path $dir "candle.exe")) -and (Test-Path (Join-Path $dir "light.exe")))) {
+            $env:Path = $dir + ";" + $env:Path
+            Write-Host "Using WiX tools: $dir" -ForegroundColor DarkCyan
+            return $true
+        }
+    }
+
+    $wixTool = Get-Command wix.exe -ErrorAction SilentlyContinue
+    if ($wixTool) { return $true }
+
+    $candleTool = Get-Command candle.exe -ErrorAction SilentlyContinue
+    $lightTool = Get-Command light.exe -ErrorAction SilentlyContinue
+    return [bool]($candleTool -and $lightTool)
+}
+
 if (-not (Test-Path $GradleWrapper)) {
     throw "gradlew.bat not found at $GradleWrapper"
 }
@@ -109,23 +141,20 @@ $env:JAVA_HOME = $ResolvedJavaHome
 $env:Path = (Join-Path $ResolvedJavaHome "bin") + ";" + $env:Path
 Write-Host "Using JAVA_HOME: $ResolvedJavaHome" -ForegroundColor DarkCyan
 
-Write-Host "Step 1/3: Build native DLLs..." -ForegroundColor Cyan
-& (Join-Path $PSScriptRoot "build-native.ps1") -Configuration $Configuration -CopyToRoot -Cuda:$Cuda -UseNinja:$UseNinja
-
-Write-Host "Step 2/3: Build Compose distributable..." -ForegroundColor Cyan
-Invoke-Gradle @(":composeApp:createDistributable") -Retries $GradleRetries
-
-if ($BuildMsi) {
-    Write-Host "Building MSI installer..." -ForegroundColor Cyan
-    try {
-        Invoke-Gradle @(":composeApp:packageMsi") -Retries $GradleRetries
-    } catch {
-        Write-Warning "MSI packaging failed. Portable app is still usable."
-        Write-Warning $_
+if (-not $SkipNativeBuild) {
+    Write-Host "Step 1/4: Build native DLLs..." -ForegroundColor Cyan
+    & (Join-Path $PSScriptRoot "build-native.ps1") -Configuration $Configuration -CopyToRoot -Cuda:$Cuda -UseNinja:$UseNinja -Clean:$Clean
+    if ($LASTEXITCODE -ne 0) {
+        throw "Native build failed with exit code $LASTEXITCODE"
     }
+} else {
+    Write-Host "Step 1/4: Skipping native build." -ForegroundColor Yellow
 }
 
-$AppRoot = Join-Path $ComposeAppDir "build\compose\binaries\main\app\qwen-tts-studio"
+Write-Host "Step 2/4: Build Compose distributable..." -ForegroundColor Cyan
+Invoke-Gradle @(":composeApp:createDistributable") -Retries $GradleRetries
+
+$AppRoot = Join-Path $ComposeAppDir "build\compose\binaries\main\app\$PackageName"
 if (-not (Test-Path $AppRoot)) {
     throw "Could not find packaged app root: $AppRoot"
 }
@@ -156,7 +185,7 @@ if ($Cuda) {
     }
 }
 $NativeDlls = $NativeDlls | Select-Object -Unique
-Write-Host "Step 3/3: Copy native DLLs into packaged app..." -ForegroundColor Cyan
+Write-Host "Step 3/4: Copy native DLLs into packaged app..." -ForegroundColor Cyan
 foreach ($dll in $NativeDlls) {
     $src = Join-Path $RepoRoot $dll
     if (-not (Test-Path $src)) {
@@ -165,8 +194,56 @@ foreach ($dll in $NativeDlls) {
     Copy-Item $src $AppRoot -Force
 }
 
+Write-Host "Step 4/4: Create portable zip..." -ForegroundColor Cyan
+$ZipDir = Join-Path $ComposeAppDir "build\compose\binaries\main\portable"
+New-Item -ItemType Directory -Path $ZipDir -Force | Out-Null
+$ZipPath = Join-Path $ZipDir "$PackageName-windows-portable.zip"
+if (Test-Path $ZipPath) {
+    Remove-Item $ZipPath -Force
+}
+Compress-Archive -Path $AppRoot -DestinationPath $ZipPath -Force
+
+if ($BuildMsi) {
+    Write-Host "Building MSI installer from packaged app image..." -ForegroundColor Cyan
+    if (-not (Add-WixToolsToPath)) {
+        throw "WiX tools were not found. Run Gradle packaging once to download WiX or install WiX and retry."
+    }
+
+    $MsiDir = Join-Path $ComposeAppDir "build\compose\binaries\main\msi"
+    New-Item -ItemType Directory -Path $MsiDir -Force | Out-Null
+    Get-ChildItem -Path $MsiDir -Filter "*.msi" -File -ErrorAction SilentlyContinue | Remove-Item -Force
+
+    try {
+        & (Join-Path $ResolvedJavaHome "bin\jpackage.exe") `
+            "--type" "msi" `
+            "--name" $PackageName `
+            "--app-image" $AppRoot `
+            "--dest" $MsiDir `
+            "--app-version" $PackageVersion `
+            "--win-menu" `
+            "--win-shortcut"
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "jpackage failed with exit code $LASTEXITCODE"
+        }
+
+        $msi = Get-ChildItem -Path $MsiDir -Filter "*.msi" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $msi) {
+            throw "jpackage completed but no MSI was written to $MsiDir"
+        }
+    } catch {
+        if ($RequireMsi) {
+            throw
+        } else {
+            Write-Warning "MSI packaging failed. Portable app is still usable."
+            Write-Warning $_
+        }
+    }
+}
+
 Write-Host "Packaging complete." -ForegroundColor Green
 Write-Host "Portable app: $AppRoot" -ForegroundColor Green
+Write-Host "Portable zip: $ZipPath" -ForegroundColor Green
 if ($BuildMsi) {
     Write-Host "MSI output is under: composeApp\build\compose\binaries\main\msi" -ForegroundColor Green
 }

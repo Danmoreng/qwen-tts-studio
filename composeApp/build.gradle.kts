@@ -44,9 +44,9 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "qwen-tts-studio"
-            packageVersion = "1.0.0"
+            packageVersion = providers.environmentVariable("APP_VERSION").orElse("1.0.0").get()
 
-            modules("java.base", "java.desktop", "java.logging", "java.naming", "java.sql", "jdk.unsupported", "jdk.security.auth")
+            modules("java.base", "java.desktop", "java.logging", "java.naming", "java.net.http", "java.sql", "jdk.unsupported", "jdk.security.auth")
         }
     }
 }

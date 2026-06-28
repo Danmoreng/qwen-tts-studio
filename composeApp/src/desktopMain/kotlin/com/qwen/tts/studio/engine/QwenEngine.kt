@@ -204,6 +204,10 @@ class QwenEngine {
                     System.load(ggmlBase.absolutePath)
                     println("[QwenEngine] Loaded dependency from root: ${ggmlBase.name}")
 
+                    if (isWindows) {
+                        preloadWindowsCudaRuntime(root)
+                    }
+
                     // Optional backend dependencies (CPU / CUDA).
                     // Load before ggml because ggml can import backend DLLs.
                     val backendCandidates = listOf("${prefix}ggml-cpu$ext", "${prefix}ggml-cuda$ext")
@@ -220,7 +224,11 @@ class QwenEngine {
                             println("[QwenEngine] Loaded dependency from root: $depName")
                             backendLoaded = true
                         } catch (e: Throwable) {
-                            throw IllegalStateException("Failed loading dependency: ${depFile.absolutePath}", e)
+                            if (depName.contains("cuda", ignoreCase = true) && backendLoaded) {
+                                System.err.println("[QwenEngine] CUDA backend not available: ${e.message}")
+                            } else {
+                                throw IllegalStateException("Failed loading dependency: ${depFile.absolutePath}", e)
+                            }
                         }
                     }
                     if (!backendLoaded) {
@@ -251,6 +259,37 @@ class QwenEngine {
                     e.printStackTrace()
                 }
             }
+        }
+
+        private fun preloadWindowsCudaRuntime(root: File) {
+            val cudaRuntimePatterns = listOf(
+                "cudart64_*.dll",
+                "cublas64_*.dll",
+                "cublasLt64_*.dll"
+            )
+
+            for (pattern in cudaRuntimePatterns) {
+                val runtimeDll = root.listFiles { file ->
+                    file.isFile && wildcardMatches(pattern, file.name)
+                }?.maxByOrNull { it.lastModified() }
+
+                if (runtimeDll != null) {
+                    try {
+                        System.load(runtimeDll.absolutePath)
+                        println("[QwenEngine] Loaded CUDA runtime from root: ${runtimeDll.name}")
+                    } catch (e: Throwable) {
+                        System.err.println("[QwenEngine] Failed to preload CUDA runtime ${runtimeDll.name}: ${e.message}")
+                    }
+                }
+            }
+        }
+
+        private fun wildcardMatches(pattern: String, value: String): Boolean {
+            val regex = pattern
+                .replace(".", "\\.")
+                .replace("*", ".*")
+                .toRegex(RegexOption.IGNORE_CASE)
+            return regex.matches(value)
         }
 
         private fun resolveCliExe(root: File): File? {
@@ -544,18 +583,20 @@ class QwenEngine {
         val normalized = modelName.orEmpty().lowercase()
         val isCustomVoice = normalized.contains("customvoice")
         val isBase = normalized.contains("base")
+        val isVoiceDesign = normalized.contains("voicedesign") || normalized.contains("voice-design")
         val is17 = normalized.contains("1.7b")
         val dim = if (is17) 2048 else 1024
         val modelKind = when {
             isCustomVoice -> MODEL_KIND_CUSTOM_VOICE
+            isVoiceDesign -> MODEL_KIND_VOICE_DESIGN
             isBase -> MODEL_KIND_BASE
             else -> MODEL_KIND_UNKNOWN
         }
         return NativeCapabilities(
             loaded = true,
-            supportsCloning = isBase,
+            supportsCloning = isBase || isCustomVoice || isVoiceDesign,
             supportsNamedSpeakers = isCustomVoice,
-            supportsInstruction = isCustomVoice && is17,
+            supportsInstruction = (isCustomVoice && is17) || isVoiceDesign,
             speakerEmbeddingDim = dim,
             modelKind = modelKind,
             speakerCount = 0

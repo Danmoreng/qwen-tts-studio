@@ -37,19 +37,31 @@ chmod +x scripts/build-native.sh
 
 # Run the application
 # Windows:
-.\gradlew.bat :composeApp:run
+.\scripts\run-compose.ps1
 # Linux:
 ./gradlew :composeApp:run
 ```
 
 For detailed build instructions, including CUDA support and packaging, see [docs/BUILD.md](docs/BUILD.md).
 
+### Windows Packaging
+
+```powershell
+# Portable app image and zip
+.\scripts\package-windows.ps1 -Cuda -UseNinja
+
+# Portable zip and MSI installer
+.\scripts\package-windows.ps1 -Cuda -UseNinja -BuildMsi
+```
+
+Tagged pushes matching `v*` and manual dispatches run `.github/workflows/windows-release.yml`, producing a portable ZIP and MSI release.
+
 ### 3. Model Setup
 
 Qwen-TTS Studio requires GGUF model files to operate.
 
-1.  **Download Models:** You can find compatible models on Hugging Face (e.g., [Qwen3-TTS](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-Base)).
-2.  **Prepare Models:** Use the tools in `external/qwen3-tts-cpp/scripts` to convert models to GGUF format if they aren't already.
+1.  **Download Models:** On first launch, the Welcome setup can download GGUF models from [Serveurperso/Qwen3-TTS-GGUF](https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF/tree/main). You can also use the same downloader later from the **Setup** tab.
+2.  **Prepare Models Manually:** If you bring your own model files, place one `qwen-tokenizer-*` GGUF and one or more Serveurperso-style `qwen-talker-*` GGUF files in the model directory.
 3.  **Configure App:**
     - Open Qwen-TTS Studio and go to the **Setup** tab.
     - Set your **Model Directory**.
