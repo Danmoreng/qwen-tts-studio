@@ -216,13 +216,16 @@ Write-Host "Using JAVA_HOME: $ResolvedJavaHome" -ForegroundColor DarkCyan
 
 if (-not $SkipNativeBuild) {
     Write-Host "Step 1/4: Build native DLLs..." -ForegroundColor Cyan
-    $nativeBuildArgs = @("-Configuration", $Configuration, "-CopyToRoot")
-    if ($Cuda) {
-        $nativeBuildArgs += "-Cuda"
-        $nativeBuildArgs += @("-CudaArchitectures", $PortableCudaArchitectures)
+    $nativeBuildArgs = @{
+        Configuration = $Configuration
+        CopyToRoot = $true
     }
-    if ($UseNinja) { $nativeBuildArgs += "-UseNinja" }
-    if ($Clean) { $nativeBuildArgs += "-Clean" }
+    if ($Cuda) {
+        $nativeBuildArgs.Cuda = $true
+        $nativeBuildArgs.CudaArchitectures = $PortableCudaArchitectures
+    }
+    if ($UseNinja) { $nativeBuildArgs.UseNinja = $true }
+    if ($Clean) { $nativeBuildArgs.Clean = $true }
     & (Join-Path $PSScriptRoot "build-native.ps1") @nativeBuildArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Native build failed with exit code $LASTEXITCODE"

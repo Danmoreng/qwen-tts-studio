@@ -121,13 +121,16 @@ Write-Host "Existing CUDA backend DLLs: $ExistingCudaBackend"
 Write-Host "-------------------------------------------"
 
 if ($BuildNative) {
-    $nativeArgs = @()
-    if ($Cuda) { $nativeArgs += "-Cuda" }
-    if ($UseNinja) { $nativeArgs += "-UseNinja" }
-    if ($CleanNative) { $nativeArgs += "-Clean" }
+    $nativeArgs = @{}
+    if ($Cuda) { $nativeArgs.Cuda = $true }
+    if ($UseNinja) { $nativeArgs.UseNinja = $true }
+    if ($CleanNative) { $nativeArgs.Clean = $true }
 
     if ($DryRun) {
-        Write-Host "Dry run: would execute scripts\build-native.ps1 $($nativeArgs -join ' ')"
+        $nativeArgText = $nativeArgs.GetEnumerator() |
+            Sort-Object Name |
+            ForEach-Object { "-$($_.Name)" }
+        Write-Host "Dry run: would execute scripts\build-native.ps1 $($nativeArgText -join ' ')"
     } else {
         & (Join-Path $ScriptDir "build-native.ps1") @nativeArgs
         if ($LASTEXITCODE -ne 0) {
