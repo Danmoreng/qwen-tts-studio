@@ -8,7 +8,7 @@ Qwen-TTS Studio is a modern desktop application for high-quality, local text-to-
 
 - **Local Inference:** All processing happens on your machine. No data leaves your computer.
 - **High Performance:** Powered by a native C++ engine with support for CPU and NVIDIA CUDA acceleration.
-- **Voice Cloning:** Create custom voice presets from a short reference audio clip (supported by Base models).
+- **Voice Cloning:** Create custom voice presets from a short reference audio clip, with reusable speaker embeddings and optional full ICL voice prompts (supported by Base models).
 - **Instruction Control:** Use natural language prompts to control voice design, tone, emotion, and style (supported by 1.7B CustomVoice and VoiceDesign models).
 - **Named Speakers:** Built-in support for models with predefined speaker profiles.
 - **Adaptive UI:** The interface automatically adapts to the capabilities of the loaded model.
@@ -59,6 +59,12 @@ chmod +x scripts/build-native.sh
 
 For detailed build instructions, including CUDA support and packaging, see [docs/BUILD.md](docs/BUILD.md).
 
+After updating `external/qwen3-tts-cpp` or any JNI/native API surface, rebuild the native backend before running:
+
+```powershell
+.\scripts\run-compose.ps1 -Cuda -BuildNative
+```
+
 ### Windows Packaging
 
 ```powershell
@@ -94,13 +100,15 @@ Qwen-TTS Studio requires GGUF model files to operate.
 The main generation interface.
 - **Text:** Enter the text you want to synthesize.
 - **Speaker:** Select a named speaker or a custom voice preset.
+- **Clone Mode:** For custom voice presets, choose **Embedding** for the lightweight speaker-embedding path or **ICL** for the full prompt path when a reference transcript was saved.
 - **Instruction:** (If supported) Enter style instructions like "Whispering" or "Excited".
 - **Generate:** Click to synthesize and play the audio.
 
 ### Voices
 Manage your voice presets.
-- **Extract:** Upload a short WAV file (3-10 seconds) to extract a voice embedding.
-- **Save:** Give your custom voice a name to use it in the Studio tab.
+- **Extract:** Upload or record a short WAV file (3-10 seconds) to extract reusable speaker embeddings.
+- **ICL Prompt:** Optionally enter the transcript of the reference audio to save a full ICL voice prompt. ICL prompts include the speaker embedding, reference text tokens, and reference speech codes for reuse.
+- **Save:** Give your custom voice a name to use it in the Studio tab. Missing embedding or ICL prompt dimensions can be generated later from the saved preset.
 
 ### Setup
 Configure application settings and models.

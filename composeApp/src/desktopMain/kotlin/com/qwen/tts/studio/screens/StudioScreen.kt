@@ -70,6 +70,7 @@ import androidx.compose.ui.unit.sp
 import com.qwen.tts.studio.engine.QwenEngine
 import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import com.qwen.tts.studio.viewmodel.StudioViewModel
+import com.qwen.tts.studio.viewmodel.VoiceCloneMode
 import com.qwen.tts.studio.viewmodel.VoicesViewModel
 import io.github.vinceglb.filekit.compose.rememberFileSaverLauncher
 
@@ -94,6 +95,7 @@ fun StudioScreen(
     val availableModelNames by settingsViewModel.availableModelNames.collectAsState()
     val voices by voicesViewModel.voices.collectAsState()
     val isCreatingVoice by voicesViewModel.isCreating.collectAsState()
+    val selectedVoicePreset = voices.firstOrNull { it.name == uiState.selectedVoice }
 
     val saverLauncher = rememberFileSaverLauncher { file ->
         file?.path?.let { viewModel.saveAudioToFile(java.io.File(it)) }
@@ -288,6 +290,21 @@ fun StudioScreen(
                                 }
                             }
                         }
+                        if (selectedVoicePreset?.isSystem == false) {
+                            OutlinedButton(
+                                onClick = { viewModel.onVoiceCloneModeChange(VoiceCloneMode.SpeakerEmbedding) },
+                                enabled = uiState.voiceCloneMode != VoiceCloneMode.SpeakerEmbedding
+                            ) {
+                                Text("Embedding")
+                            }
+                            OutlinedButton(
+                                onClick = { viewModel.onVoiceCloneModeChange(VoiceCloneMode.IclPrompt) },
+                                enabled = uiState.voiceCloneMode != VoiceCloneMode.IclPrompt &&
+                                    (selectedVoicePreset.iclPrompts.isNotEmpty() || !selectedVoicePreset.referenceText.isNullOrBlank())
+                            ) {
+                                Text("ICL")
+                            }
+                        }
                     }
                 }
             }
@@ -397,17 +414,36 @@ fun StudioScreen(
                     }
 
                     val useNamedSpeaker = uiState.supportsNamedSpeakers && uiState.selectedSpeaker.isNotBlank()
-                    val speakerEmbeddingPath = if (uiState.supportsCloning && !useNamedSpeaker) {
+                    val speakerEmbeddingPath = if (
+                        uiState.supportsCloning &&
+                        !useNamedSpeaker &&
+                        uiState.voiceCloneMode == VoiceCloneMode.SpeakerEmbedding
+                    ) {
                         voicesViewModel.speakerEmbeddingForVoice(uiState.selectedVoice, uiState.speakerEmbeddingDim)
                     } else {
                         null
                     }
-                    val selectedVoicePreset = voices.firstOrNull { it.name == uiState.selectedVoice }
+                    val iclPromptPath = if (
+                        uiState.supportsCloning &&
+                        !useNamedSpeaker &&
+                        uiState.voiceCloneMode == VoiceCloneMode.IclPrompt
+                    ) {
+                        voicesViewModel.iclPromptForVoice(uiState.selectedVoice, uiState.speakerEmbeddingDim)
+                    } else {
+                        null
+                    }
                     val missingSpeakerEmbedding = uiState.supportsCloning &&
                         !useNamedSpeaker &&
+                        uiState.voiceCloneMode == VoiceCloneMode.SpeakerEmbedding &&
                         selectedVoicePreset?.isSystem == false &&
                         uiState.speakerEmbeddingDim > 0 &&
                         speakerEmbeddingPath == null
+                    val missingIclPrompt = uiState.supportsCloning &&
+                        !useNamedSpeaker &&
+                        uiState.voiceCloneMode == VoiceCloneMode.IclPrompt &&
+                        selectedVoicePreset?.isSystem == false &&
+                        uiState.speakerEmbeddingDim > 0 &&
+                        iclPromptPath == null
 
                     if (missingSpeakerEmbedding) {
                         Row(
@@ -442,10 +478,46 @@ fun StudioScreen(
                             }
                         }
                     }
+                    if (missingIclPrompt) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "D${uiState.speakerEmbeddingDim} ICL prompt is missing for ${uiState.selectedVoice}.",
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedButton(
+                                onClick = {
+                                    voicesViewModel.createMissingIclPrompt(
+                                        uiState.selectedVoice,
+                                        uiState.speakerEmbeddingDim,
+                                        modelDir,
+                                        backendPreference
+                                    )
+                                },
+                                enabled = !isCreatingVoice && !selectedVoicePreset.referenceText.isNullOrBlank()
+                            ) {
+                                if (isCreatingVoice) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Generating...")
+                                } else {
+                                    Text("Generate ICL D${uiState.speakerEmbeddingDim}")
+                                }
+                            }
+                        }
+                    }
 
                     Button(
-                        onClick = { viewModel.generateAudio(modelDir, modelName, speakerEmbeddingPath, backendPreference) },
-                        enabled = uiState.text.isNotBlank() && !uiState.isGenerating && !missingSpeakerEmbedding,
+                        onClick = { viewModel.generateAudio(modelDir, modelName, speakerEmbeddingPath, iclPromptPath, backendPreference) },
+                        enabled = uiState.text.isNotBlank() &&
+                            !uiState.isGenerating &&
+                            !missingSpeakerEmbedding &&
+                            !missingIclPrompt,
                         contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
                     ) {
                         if (uiState.isGenerating) {

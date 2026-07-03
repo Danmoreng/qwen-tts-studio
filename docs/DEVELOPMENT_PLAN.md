@@ -17,6 +17,7 @@ Desktop-first local TTS workflow with a modern UI and native C++ inference backe
   - Model-name aware loading
   - Named speaker API
   - Instruction + speaker plumbing in JNI/C/KMP layers
+  - Reusable full ICL voice prompt extraction and synthesis
 - Capability-driven UI behavior:
   - App detects model capabilities from loaded model metadata
   - Controls are shown/hidden based on detected capabilities
@@ -30,6 +31,8 @@ Desktop-first local TTS workflow with a modern UI and native C++ inference backe
 - Voices behavior:
   - Voice extraction/presets enabled only when model supports cloning
   - Speaker presets remain embedding-dimension aware to avoid mismatched reuse
+  - Optional reference transcript saves reusable full ICL prompts beside speaker embeddings
+  - Presets can generate missing speaker embedding or ICL prompt dimensions later
 
 ### In Progress / Known Issues
 
@@ -43,6 +46,7 @@ Desktop-first local TTS workflow with a modern UI and native C++ inference backe
 |---|---|---|
 | Text-to-speech generation | Yes | Yes |
 | Custom voice cloning (reference WAV/embedding) | Yes | No |
+| Full ICL voice clone prompt reuse | Yes (with reference transcript) | No |
 | Instruction/style prompt | No (current Base models) | Yes (when capability is present) |
 | Named speaker dropdown | No (current Base models) | Yes |
 
@@ -51,6 +55,11 @@ Desktop-first local TTS workflow with a modern UI and native C++ inference backe
 1. Build native backend:
 ```powershell
 pwsh -ExecutionPolicy Bypass -File .\scripts\build-native.ps1
+```
+
+After updating the native submodule or JNI-facing APIs, rebuild before running:
+```powershell
+.\scripts\run-compose.ps1 -Cuda -BuildNative
 ```
 
 2. Run desktop app:

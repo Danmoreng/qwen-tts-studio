@@ -27,6 +27,11 @@ import javax.sound.sampled.DataLine
 import javax.sound.sampled.Mixer
 import javax.sound.sampled.SourceDataLine
 
+enum class VoiceCloneMode {
+    SpeakerEmbedding,
+    IclPrompt
+}
+
 /**
  * UI state for the Studio screen.
  *
@@ -55,6 +60,7 @@ data class StudioUiState(
     val selectedVoice: String = "Default Voice (Model)",
     val availableSpeakers: List<String> = emptyList(),
     val selectedSpeaker: String = "",
+    val voiceCloneMode: VoiceCloneMode = VoiceCloneMode.SpeakerEmbedding,
     val supportsCloning: Boolean = true,
     val supportsNamedSpeakers: Boolean = false,
     val supportsInstruction: Boolean = false,
@@ -156,6 +162,10 @@ class StudioViewModel : ViewModel() {
         _uiState.update { it.copy(selectedSpeaker = newSpeaker) }
     }
 
+    fun onVoiceCloneModeChange(mode: VoiceCloneMode) {
+        _uiState.update { it.copy(voiceCloneMode = mode, error = null) }
+    }
+
     /**
      * Updates the selected language.
      *
@@ -216,6 +226,7 @@ class StudioViewModel : ViewModel() {
         modelDir: String,
         modelName: String?,
         speakerEmbeddingPath: String?,
+        iclPromptPath: String?,
         backendPreference: NativeBackendPreference
     ) {
         val currentState = _uiState.value
@@ -278,14 +289,19 @@ class StudioViewModel : ViewModel() {
                     } else {
                         null
                     }
-                    val effectiveEmbedding = if (latestState.supportsCloning && !useNamedSpeaker) speakerEmbeddingPath else null
+                    val effectiveIclPrompt = if (latestState.supportsCloning && !useNamedSpeaker) iclPromptPath else null
+                    val effectiveEmbedding = if (latestState.supportsCloning && !useNamedSpeaker && effectiveIclPrompt == null) {
+                        speakerEmbeddingPath
+                    } else {
+                        null
+                    }
                     val effectiveInstruction = if (latestState.supportsInstruction) {
                         latestState.selectedInstruction.takeIf { it.isNotBlank() }
                     } else {
                         null
                     }
 
-                    if (latestState.useStreaming) {
+                    if (latestState.useStreaming && effectiveIclPrompt == null) {
                         generationUsedStreaming = true
                         streamingGenerationActive = true
                         val streamedChunks = mutableListOf<FloatArray>()
@@ -297,6 +313,7 @@ class StudioViewModel : ViewModel() {
                                 text = latestState.text,
                                 referenceWav = null,
                                 speakerEmbeddingPath = effectiveEmbedding,
+                                iclPromptPath = effectiveIclPrompt,
                                 languageId = langId,
                                 instruction = effectiveInstruction,
                                 speaker = effectiveSpeaker,
@@ -348,6 +365,7 @@ class StudioViewModel : ViewModel() {
                                 text = latestState.text,
                                 referenceWav = null,
                                 speakerEmbeddingPath = effectiveEmbedding,
+                                iclPromptPath = effectiveIclPrompt,
                                 languageId = langId,
                                 instruction = effectiveInstruction,
                                 speaker = effectiveSpeaker

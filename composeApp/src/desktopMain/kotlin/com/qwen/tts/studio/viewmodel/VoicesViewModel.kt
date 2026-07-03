@@ -37,16 +37,20 @@ import javax.sound.sampled.TargetDataLine
  * @property id Unique identifier for the voice preset.
  * @property name Display name of the voice.
  * @property referenceWav Optional path to a reference WAV file for cloning.
+ * @property referenceText Optional transcript for full ICL voice prompt extraction.
  * @property speakerEmbeddings Extracted speaker embeddings keyed by embedding dimension.
+ * @property iclPrompts Extracted full ICL prompts keyed by embedding dimension.
  */
 data class VoicePreset(
     val id: String,
     val name: String,
     val referenceWav: String?,
-    val speakerEmbeddings: Map<Int, String> = emptyMap()
+    val referenceText: String? = null,
+    val speakerEmbeddings: Map<Int, String> = emptyMap(),
+    val iclPrompts: Map<Int, String> = emptyMap()
 ) {
     /** Whether this is a built-in system voice (not a custom preset). */
-    val isSystem: Boolean = referenceWav == null && speakerEmbeddings.isEmpty()
+    val isSystem: Boolean = referenceWav == null && speakerEmbeddings.isEmpty() && iclPrompts.isEmpty()
 }
 
 data class VoiceRecordingState(
@@ -158,6 +162,7 @@ class VoicesViewModel : ViewModel() {
     fun createVoicePreset(
         name: String,
         referenceWav: String,
+        referenceText: String?,
         modelDir: String,
         modelName: String?,
         backendPreference: NativeBackendPreference
@@ -183,6 +188,7 @@ class VoicesViewModel : ViewModel() {
 
         val uniqueName = makeUniqueName(trimmedName)
         val voiceId = "voice-${System.currentTimeMillis()}"
+        val trimmedReferenceText = referenceText?.trim().orEmpty()
         viewModelScope.launch {
             try {
                 val targetModels = withContext(Dispatchers.IO) { findEmbeddingTargetModels(modelDir, modelName) }
@@ -192,19 +198,27 @@ class VoicesViewModel : ViewModel() {
                 }
 
                 val embeddingsDir = withContext(Dispatchers.IO) { embeddingsDirectory().apply { mkdirs() } }
+                val iclPromptsDir = withContext(Dispatchers.IO) { iclPromptsDirectory().apply { mkdirs() } }
                 val extractedEmbeddings = sortedMapOf<Int, String>()
+                val extractedIclPrompts = sortedMapOf<Int, String>()
                 var lastSupportsCloning = false
                 var lastEmbeddingDim = 0
+                var iclPromptWarning: String? = null
 
                 for (targetModel in targetModels) {
                     val inferredTargetDim = inferEmbeddingDimFromModelName(targetModel)
-                    if (inferredTargetDim > 0 && extractedEmbeddings.containsKey(inferredTargetDim)) {
+                    if (
+                        inferredTargetDim > 0 &&
+                        extractedEmbeddings.containsKey(inferredTargetDim) &&
+                        (trimmedReferenceText.isBlank() || extractedIclPrompts.containsKey(inferredTargetDim))
+                    ) {
                         continue
                     }
 
                     val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, targetModel, backendPreference) }
                     if (!loaded) {
                         deleteEmbeddingFiles(extractedEmbeddings.values)
+                        deleteIclPromptFiles(extractedIclPrompts.values)
                         _error.value = "Failed to load $targetModel for speaker embedding extraction."
                         return@launch
                     }
@@ -217,26 +231,50 @@ class VoicesViewModel : ViewModel() {
                     _supportsCloning.value = supportsCloning
                     _currentEmbeddingDim.value = embeddingDim
 
-                    if (!supportsCloning || embeddingDim <= 0 || extractedEmbeddings.containsKey(embeddingDim)) {
+                    if (!supportsCloning || embeddingDim <= 0) {
                         continue
                     }
 
-                    val embeddingFile = File(embeddingsDir, "$voiceId-d$embeddingDim.json")
-                    val extracted = withContext(nativeDispatcher) {
-                        qwenEngine.extractSpeakerEmbedding(wavFile.absolutePath, embeddingFile.absolutePath)
+                    if (!extractedEmbeddings.containsKey(embeddingDim)) {
+                        val embeddingFile = File(embeddingsDir, "$voiceId-d$embeddingDim.json")
+                        val extracted = withContext(nativeDispatcher) {
+                            qwenEngine.extractSpeakerEmbedding(wavFile.absolutePath, embeddingFile.absolutePath)
+                        }
+                        if (!extracted) {
+                            deleteEmbeddingFiles(extractedEmbeddings.values + embeddingFile.absolutePath)
+                            deleteIclPromptFiles(extractedIclPrompts.values)
+                            _error.value = "Failed to extract D$embeddingDim speaker embedding with $targetModel."
+                            return@launch
+                        }
+                        extractedEmbeddings[embeddingDim] = embeddingFile.absolutePath
                     }
-                    if (!extracted) {
-                        deleteEmbeddingFiles(extractedEmbeddings.values + embeddingFile.absolutePath)
-                        _error.value = "Failed to extract D$embeddingDim speaker embedding with $targetModel."
-                        return@launch
+
+                    if (trimmedReferenceText.isNotBlank() && !extractedIclPrompts.containsKey(embeddingDim)) {
+                        val iclPromptFile = File(iclPromptsDir, "$voiceId-d$embeddingDim.json")
+                        val iclLoaded = withContext(nativeDispatcher) {
+                            qwenEngine.loadIclPromptEncoder(modelDir, targetModel, backendPreference)
+                        }
+                        if (!iclLoaded) {
+                            deleteIclPromptFiles(extractedIclPrompts.values + iclPromptFile.absolutePath)
+                            iclPromptWarning = "Speaker preset created, but ICL prompt extraction is unavailable. Rebuild the native backend, then generate the ICL prompt from this preset."
+                            continue
+                        }
+                        val iclExtracted = withContext(nativeDispatcher) {
+                            qwenEngine.extractIclPrompt(wavFile.absolutePath, trimmedReferenceText, iclPromptFile.absolutePath)
+                        }
+                        if (!iclExtracted) {
+                            deleteIclPromptFiles(extractedIclPrompts.values + iclPromptFile.absolutePath)
+                            iclPromptWarning = "Speaker preset created, but D$embeddingDim ICL prompt extraction failed with $targetModel."
+                            continue
+                        }
+                        extractedIclPrompts[embeddingDim] = iclPromptFile.absolutePath
                     }
-                    extractedEmbeddings[embeddingDim] = embeddingFile.absolutePath
                 }
 
-                if (extractedEmbeddings.isEmpty()) {
+                if (extractedEmbeddings.isEmpty() && extractedIclPrompts.isEmpty()) {
                     _supportsCloning.value = lastSupportsCloning
                     _currentEmbeddingDim.value = lastEmbeddingDim
-                    _error.value = "No installed model supports custom speaker embedding extraction."
+                    _error.value = "No installed model supports custom voice clone extraction."
                     return@launch
                 }
 
@@ -244,11 +282,13 @@ class VoicesViewModel : ViewModel() {
                     id = voiceId,
                     name = uniqueName,
                     referenceWav = wavFile.absolutePath,
-                    speakerEmbeddings = extractedEmbeddings
+                    referenceText = trimmedReferenceText.ifBlank { null },
+                    speakerEmbeddings = extractedEmbeddings,
+                    iclPrompts = extractedIclPrompts
                 )
                 _voices.value = _voices.value + preset
                 saveVoices()
-                _error.value = null
+                _error.value = iclPromptWarning
             } finally {
                 _isCreating.value = false
             }
@@ -341,6 +381,107 @@ class VoicesViewModel : ViewModel() {
                 _voices.value = _voices.value.map {
                     if (it.id == preset.id) {
                         it.copy(speakerEmbeddings = (it.speakerEmbeddings + (targetDim to embeddingFile.absolutePath)).toSortedMap())
+                    } else {
+                        it
+                    }
+                }
+                saveVoices()
+            } finally {
+                _isCreating.value = false
+            }
+        }
+    }
+
+    fun createMissingIclPrompt(
+        name: String,
+        targetDim: Int,
+        modelDir: String,
+        backendPreference: NativeBackendPreference
+    ) {
+        if (_isCreating.value) return
+        if (targetDim <= 0) {
+            _error.value = "Unknown ICL prompt dimension."
+            return
+        }
+        if (modelDir.isBlank()) {
+            _error.value = "Please select the Model Directory in Setup."
+            return
+        }
+
+        val preset = _voices.value.firstOrNull { it.name == name || it.id == name }
+        if (preset == null || preset.isSystem) {
+            _error.value = "Select a custom speaker preset first."
+            return
+        }
+        if (preset.iclPrompts.containsKey(targetDim)) {
+            _error.value = null
+            return
+        }
+
+        val referenceWav = preset.referenceWav
+        if (referenceWav.isNullOrBlank() || !File(referenceWav).isFile) {
+            _error.value = "This speaker preset has no reference WAV for generating a D$targetDim ICL prompt."
+            return
+        }
+
+        val referenceText = preset.referenceText?.trim().orEmpty()
+        if (referenceText.isBlank()) {
+            _error.value = "This speaker preset has no reference transcript for ICL prompt extraction."
+            return
+        }
+
+        _isCreating.value = true
+        _error.value = null
+
+        viewModelScope.launch {
+            try {
+                val targetModels = withContext(Dispatchers.IO) {
+                    findEmbeddingTargetModels(modelDir, null)
+                        .filter { inferEmbeddingDimFromModelName(it) == targetDim }
+                }
+                if (targetModels.isEmpty()) {
+                    _error.value = "No installed D$targetDim qwen-talker model found."
+                    return@launch
+                }
+
+                val iclPromptFile = withContext(Dispatchers.IO) {
+                    iclPromptsDirectory().apply { mkdirs() }
+                    File(iclPromptsDirectory(), "${preset.id}-d$targetDim.json")
+                }
+                var extracted = false
+                var lastError: String? = null
+                for (targetModel in targetModels) {
+                    val loaded = withContext(nativeDispatcher) {
+                        qwenEngine.loadIclPromptEncoder(modelDir, targetModel, backendPreference)
+                    }
+                    if (!loaded) {
+                        lastError = "Failed to load $targetModel for ICL prompt extraction."
+                        continue
+                    }
+
+                    val embeddingDim = inferEmbeddingDimFromModelName(targetModel)
+                    _currentEmbeddingDim.value = embeddingDim
+                    if (embeddingDim != targetDim) {
+                        lastError = "$targetModel does not expose D$targetDim ICL prompts."
+                        continue
+                    }
+
+                    extracted = withContext(nativeDispatcher) {
+                        qwenEngine.extractIclPrompt(referenceWav, referenceText, iclPromptFile.absolutePath)
+                    }
+                    if (extracted) break
+                    lastError = "Failed to extract D$targetDim ICL prompt with $targetModel."
+                }
+
+                if (!extracted) {
+                    runCatching { iclPromptFile.delete() }
+                    _error.value = lastError ?: "Failed to extract D$targetDim ICL prompt."
+                    return@launch
+                }
+
+                _voices.value = _voices.value.map {
+                    if (it.id == preset.id) {
+                        it.copy(iclPrompts = (it.iclPrompts + (targetDim to iclPromptFile.absolutePath)).toSortedMap())
                     } else {
                         it
                     }
@@ -476,6 +617,7 @@ class VoicesViewModel : ViewModel() {
         if (target.isSystem) return
 
         deleteEmbeddingFiles(target.speakerEmbeddings.values)
+        deleteIclPromptFiles(target.iclPrompts.values)
         _voices.value = _voices.value.filterNot { it.id == id }
         saveVoices()
     }
@@ -503,10 +645,22 @@ class VoicesViewModel : ViewModel() {
         return preset.speakerEmbeddings[expectedDim]
     }
 
+    fun iclPromptForVoice(name: String, expectedDim: Int): String? {
+        val preset = _voices.value.firstOrNull { it.name == name } ?: return null
+        if (expectedDim <= 0) return preset.iclPrompts.values.firstOrNull()
+        return preset.iclPrompts[expectedDim]
+    }
+
     fun hasSpeakerEmbeddingForVoice(name: String, expectedDim: Int): Boolean {
         val preset = _voices.value.firstOrNull { it.name == name } ?: return false
         if (preset.isSystem) return true
         return speakerEmbeddingForVoice(name, expectedDim) != null
+    }
+
+    fun hasIclPromptForVoice(name: String, expectedDim: Int): Boolean {
+        val preset = _voices.value.firstOrNull { it.name == name } ?: return false
+        if (preset.isSystem) return false
+        return iclPromptForVoice(name, expectedDim) != null
     }
 
     fun createMixedVoicePreset(
@@ -632,7 +786,16 @@ class VoicesViewModel : ViewModel() {
                             .ifEmpty {
                                 if (embedding != null && dim != null) mapOf(dim to embedding) else emptyMap()
                             }
-                        VoicePreset(id = id, name = name, referenceWav = wav, speakerEmbeddings = embeddings)
+                        val referenceText = decodeStorageText(parts.getOrNull(6))
+                        val iclPrompts = decodeIclPrompts(parts.getOrNull(7))
+                        VoicePreset(
+                            id = id,
+                            name = name,
+                            referenceWav = wav,
+                            referenceText = referenceText,
+                            speakerEmbeddings = embeddings,
+                            iclPrompts = iclPrompts
+                        )
                     } else {
                         val wav = parts.getOrNull(2).orEmpty()
                         if (wav.isBlank()) return@mapNotNull null
@@ -657,7 +820,9 @@ class VoicesViewModel : ViewModel() {
                     primary?.value.orEmpty(),
                     it.referenceWav.orEmpty(),
                     primary?.key?.toString().orEmpty(),
-                    encodeSpeakerEmbeddings(it.speakerEmbeddings)
+                    encodeSpeakerEmbeddings(it.speakerEmbeddings),
+                    encodeStorageText(it.referenceText),
+                    encodeIclPrompts(it.iclPrompts)
                 ).joinToString("\t")
             }
         storageFile.writeText(lines.joinToString(System.lineSeparator()))
@@ -729,12 +894,28 @@ class VoicesViewModel : ViewModel() {
         )
     }
 
+    private fun iclPromptsDirectory(): File {
+        return File(
+            File(System.getProperty("user.home"), ".qwen-tts-studio"),
+            "icl-prompts"
+        )
+    }
+
     private fun deleteEmbeddingFiles(paths: Collection<String>) {
         val embeddingsDir = runCatching { embeddingsDirectory().canonicalFile }.getOrNull() ?: return
+        deleteManagedFiles(paths, embeddingsDir)
+    }
+
+    private fun deleteIclPromptFiles(paths: Collection<String>) {
+        val iclPromptsDir = runCatching { iclPromptsDirectory().canonicalFile }.getOrNull() ?: return
+        deleteManagedFiles(paths, iclPromptsDir)
+    }
+
+    private fun deleteManagedFiles(paths: Collection<String>, managedDir: File) {
         paths.forEach { path ->
             runCatching {
                 val file = File(path).canonicalFile
-                if (file.parentFile == embeddingsDir && file.isFile) {
+                if (file.parentFile == managedDir && file.isFile) {
                     file.delete()
                 }
             }
@@ -742,8 +923,24 @@ class VoicesViewModel : ViewModel() {
     }
 
     private fun encodeSpeakerEmbeddings(embeddings: Map<Int, String>): String {
+        return encodePathMap(embeddings)
+    }
+
+    private fun decodeSpeakerEmbeddings(value: String?): Map<Int, String> {
+        return decodePathMap(value)
+    }
+
+    private fun encodeIclPrompts(prompts: Map<Int, String>): String {
+        return encodePathMap(prompts)
+    }
+
+    private fun decodeIclPrompts(value: String?): Map<Int, String> {
+        return decodePathMap(value)
+    }
+
+    private fun encodePathMap(paths: Map<Int, String>): String {
         val encoder = Base64.getUrlEncoder().withoutPadding()
-        return embeddings.entries
+        return paths.entries
             .sortedBy { it.key }
             .joinToString(";") { (dim, path) ->
                 val encodedPath = encoder.encodeToString(path.toByteArray(StandardCharsets.UTF_8))
@@ -751,7 +948,7 @@ class VoicesViewModel : ViewModel() {
             }
     }
 
-    private fun decodeSpeakerEmbeddings(value: String?): Map<Int, String> {
+    private fun decodePathMap(value: String?): Map<Int, String> {
         if (value.isNullOrBlank()) return emptyMap()
         val decoder = Base64.getUrlDecoder()
         return value.split(';')
@@ -765,6 +962,20 @@ class VoicesViewModel : ViewModel() {
                 dim to path
             }
             .toMap()
+    }
+
+    private fun encodeStorageText(value: String?): String {
+        if (value.isNullOrBlank()) return ""
+        return Base64.getUrlEncoder()
+            .withoutPadding()
+            .encodeToString(value.toByteArray(StandardCharsets.UTF_8))
+    }
+
+    private fun decodeStorageText(value: String?): String? {
+        if (value.isNullOrBlank()) return null
+        return runCatching {
+            String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8)
+        }.getOrNull()?.takeIf { it.isNotBlank() }
     }
 
     private fun inferSpeakerEmbeddingDim(path: String): Int? {

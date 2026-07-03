@@ -54,6 +54,15 @@ Once the native backend is built, you can run the application directly from sour
 .\gradlew.bat :composeApp:run
 ```
 
+The helper script can rebuild native libraries and then launch the app in one step:
+
+```powershell
+.\scripts\run-compose.ps1 -BuildNative
+.\scripts\run-compose.ps1 -Cuda -BuildNative
+```
+
+Use `-BuildNative` after updating `external/qwen3-tts-cpp` or changing JNI-facing native code. Otherwise Kotlin may call a JNI symbol that is not present in the previously copied `qwen3_tts.dll`.
+
 ### Linux
 ```bash
 ./gradlew :composeApp:run
@@ -118,4 +127,5 @@ This script automates the entire process: it rebuilds the native backend, calls 
 
 - **Missing JNI Headers:** Ensure your `JAVA_HOME` environment variable points to a valid JDK 21+ or that `java.exe` is on your PATH.
 - **CUDA Errors:** Ensure the `CUDA_PATH` environment variable is set so the build script can find the CUDA toolkit.
+- **`UnsatisfiedLinkError` for a new native method:** Rebuild the native backend and restart the app. On Windows, run `.\scripts\run-compose.ps1 -Cuda -BuildNative` or `pwsh -ExecutionPolicy Bypass -File .\scripts\build-native.ps1 -Cuda`. The JVM cannot reload an already-loaded DLL inside the same app process.
 - **Submodules Not Found:** If `external/qwen3-tts-cpp` is empty, run `git submodule update --init --recursive`.

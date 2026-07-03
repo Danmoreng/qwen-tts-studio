@@ -383,6 +383,7 @@ class QwenEngine {
     private external fun nativeInit(): Long
     private external fun nativeFree(ptr: Long)
     private external fun nativeLoadModels(ptr: Long, modelDir: String, modelName: String?): Boolean
+    private external fun nativeLoadIclPromptEncoder(ptr: Long, modelDir: String, modelName: String?): Boolean
     private external fun nativeSetBackendPreference(preference: Int): Boolean
     private external fun nativeGetCompiledBackendMask(): Int
     private external fun nativeGetActiveBackendName(): String?
@@ -391,6 +392,12 @@ class QwenEngine {
         text: String,
         referenceWav: String?,
         speakerEmbeddingPath: String?,
+        params: Any?
+    ): NativeResult?
+    private external fun nativeSynthesizeWithIclPrompt(
+        ptr: Long,
+        text: String,
+        iclPromptPath: String?,
         params: Any?
     ): NativeResult?
     private external fun nativeSynthesizeStreaming(
@@ -405,6 +412,12 @@ class QwenEngine {
         callback: StreamingAudioCallback
     ): NativeResult?
     private external fun nativeExtractSpeakerEmbedding(ptr: Long, referenceWav: String, outputPath: String): Boolean
+    private external fun nativeExtractIclPrompt(
+        ptr: Long,
+        referenceWav: String,
+        referenceText: String,
+        outputPath: String
+    ): Boolean
     private external fun nativeGetAvailableSpeakers(ptr: Long): String?
     private external fun nativeGetModelCapabilities(ptr: Long): NativeCapabilities?
 
@@ -466,6 +479,59 @@ class QwenEngine {
         }
     }
 
+    fun loadIclPromptEncoder(
+        modelDir: String,
+        modelName: String? = null,
+        backendPreference: NativeBackendPreference = NativeBackendPreference.Auto
+    ): Boolean {
+        if (!File(modelDir).exists() || !File(modelDir).isDirectory) return false
+
+        release()
+        loadedModelDir = modelDir
+        loadedModelName = modelName
+        useCliFallback = false
+
+        ensureNativeLoaded()
+
+        if (!isNativeLoaded) {
+            val root = try { resolveNativeRoot() } catch (e: Exception) { File(".") }
+            useCliFallback = resolveCliExe(root) != null
+            return useCliFallback
+        }
+
+        return try {
+            if (!nativeSetBackendPreference(backendPreference.nativeValue())) {
+                throw IllegalStateException("Failed to select native backend: ${backendPreference.label}")
+            }
+            nativePtr = nativeInit()
+            if (nativePtr != 0L) {
+                val ok = nativeLoadIclPromptEncoder(nativePtr, modelDir, modelName)
+                if (ok) {
+                    true
+                } else {
+                    release()
+                    val root = resolveNativeRoot()
+                    useCliFallback = resolveCliExe(root) != null
+                    useCliFallback
+                }
+            } else {
+                val root = resolveNativeRoot()
+                useCliFallback = resolveCliExe(root) != null
+                useCliFallback
+            }
+        } catch (e: UnsatisfiedLinkError) {
+            System.err.println("[QwenEngine] ICL prompt encoder JNI is unavailable. Rebuild qwen3_tts.dll after updating qwen3-tts.cpp: ${e.message}")
+            val root = resolveNativeRoot()
+            useCliFallback = resolveCliExe(root) != null
+            useCliFallback
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            val root = resolveNativeRoot()
+            useCliFallback = resolveCliExe(root) != null
+            useCliFallback
+        }
+    }
+
     /**
      * Generates audio from the given text.
      *
@@ -481,19 +547,29 @@ class QwenEngine {
         text: String,
         referenceWav: String? = null,
         speakerEmbeddingPath: String? = null,
+        iclPromptPath: String? = null,
         languageId: Int = 2050,
         instruction: String? = null,
         speaker: String? = null
     ): FloatArray? {
         if (useCliFallback) {
-            return generateViaCli(text, referenceWav, speakerEmbeddingPath, languageId, instruction, speaker)
+            return generateViaCli(text, referenceWav, speakerEmbeddingPath, iclPromptPath, languageId, instruction, speaker)
         }
 
         if (nativePtr == 0L) return null
 
         return try {
             val params = NativeParams(languageId = languageId, instruction = instruction, speaker = speaker)
-            val result = nativeSynthesize(nativePtr, text, referenceWav, speakerEmbeddingPath, params)
+            val result = try {
+                if (!iclPromptPath.isNullOrBlank()) {
+                    nativeSynthesizeWithIclPrompt(nativePtr, text, iclPromptPath, params)
+                } else {
+                    nativeSynthesize(nativePtr, text, referenceWav, speakerEmbeddingPath, params)
+                }
+            } catch (e: UnsatisfiedLinkError) {
+                System.err.println("[QwenEngine] ICL prompt synthesis JNI is unavailable. Rebuild qwen3_tts.dll after updating qwen3-tts.cpp: ${e.message}")
+                null
+            }
             if (result != null && result.success) {
                 result.audio
             } else {
@@ -512,6 +588,7 @@ class QwenEngine {
         text: String,
         referenceWav: String? = null,
         speakerEmbeddingPath: String? = null,
+        iclPromptPath: String? = null,
         languageId: Int = 2050,
         instruction: String? = null,
         speaker: String? = null,
@@ -519,7 +596,7 @@ class QwenEngine {
         onAudioChunk: (NativeAudioChunk) -> Boolean
     ): NativeResult? {
         if (useCliFallback) {
-            val audio = generateViaCli(text, referenceWav, speakerEmbeddingPath, languageId, instruction, speaker)
+            val audio = generateViaCli(text, referenceWav, speakerEmbeddingPath, iclPromptPath, languageId, instruction, speaker)
             return if (audio != null) {
                 NativeResult(audio, 24_000, true, null, 0L)
             } else {
@@ -528,6 +605,22 @@ class QwenEngine {
         }
 
         if (nativePtr == 0L) return null
+        if (!iclPromptPath.isNullOrBlank()) {
+            val audio = generate(
+                text = text,
+                referenceWav = null,
+                speakerEmbeddingPath = null,
+                iclPromptPath = iclPromptPath,
+                languageId = languageId,
+                instruction = instruction,
+                speaker = speaker
+            )
+            return if (audio != null) {
+                NativeResult(audio, 24_000, true, null, 0L)
+            } else {
+                NativeResult(null, 24_000, false, "ICL prompt streaming is unavailable in this JNI build.", 0L)
+            }
+        }
 
         return try {
             val params = NativeParams(languageId = languageId, instruction = instruction, speaker = speaker)
@@ -665,10 +758,31 @@ class QwenEngine {
         }
     }
 
+    fun extractIclPrompt(referenceWav: String, referenceText: String, outputPath: String): Boolean {
+        if (referenceWav.isBlank() || referenceText.isBlank() || outputPath.isBlank()) return false
+
+        if (useCliFallback) {
+            return extractIclPromptViaCli(referenceWav, referenceText, outputPath)
+        }
+
+        if (nativePtr == 0L) return false
+
+        return try {
+            nativeExtractIclPrompt(nativePtr, referenceWav, referenceText, outputPath)
+        } catch (e: UnsatisfiedLinkError) {
+            System.err.println("[QwenEngine] ICL prompt extraction JNI is unavailable. Rebuild qwen3_tts.dll after updating qwen3-tts.cpp: ${e.message}")
+            false
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            false
+        }
+    }
+
     private fun generateViaCli(
         text: String,
         referenceWav: String?,
         speakerEmbeddingPath: String?,
+        iclPromptPath: String?,
         languageId: Int,
         instruction: String?,
         speaker: String?
@@ -691,7 +805,9 @@ class QwenEngine {
         loadedModelName?.takeIf { it.isNotBlank() }?.let {
             command += listOf("--model-name", it)
         }
-        if (!speakerEmbeddingPath.isNullOrBlank()) {
+        if (!iclPromptPath.isNullOrBlank()) {
+            command += listOf("--icl-prompt", iclPromptPath)
+        } else if (!speakerEmbeddingPath.isNullOrBlank()) {
             command += listOf("--speaker-embedding", speakerEmbeddingPath)
         } else if (!referenceWav.isNullOrBlank()) {
             command += listOf("-r", referenceWav)
@@ -752,6 +868,39 @@ class QwenEngine {
         val exitCode = process.waitFor()
         if (exitCode != 0) {
             System.err.println("[QwenEngine] CLI embedding extraction failed (exit=$exitCode).")
+            if (processOutput.isNotBlank()) {
+                System.err.println(processOutput)
+            }
+            return false
+        }
+        return File(outputPath).exists()
+    }
+
+    private fun extractIclPromptViaCli(referenceWav: String, referenceText: String, outputPath: String): Boolean {
+        val modelDir = loadedModelDir ?: return false
+        val root = try { resolveNativeRoot() } catch (e: Exception) { File(".") }
+        val cliExe = resolveCliExe(root) ?: return false
+
+        val command = mutableListOf(
+            cliExe.absolutePath,
+            "-m", modelDir,
+            "-r", referenceWav,
+            "--reference-text", referenceText,
+            "--extract-icl-prompt", outputPath
+        )
+
+        loadedModelName?.takeIf { it.isNotBlank() }?.let {
+            command += listOf("--model-name", it)
+        }
+
+        val process = ProcessBuilder(command)
+            .directory(root)
+            .redirectErrorStream(true)
+            .start()
+        val processOutput = process.inputStream.bufferedReader().use { it.readText() }
+        val exitCode = process.waitFor()
+        if (exitCode != 0) {
+            System.err.println("[QwenEngine] CLI ICL prompt extraction failed (exit=$exitCode).")
             if (processOutput.isNotBlank()) {
                 System.err.println(processOutput)
             }

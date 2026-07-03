@@ -64,6 +64,7 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
     val backendPreference by settingsViewModel.backendPreference.collectAsState()
     var presetName by remember { mutableStateOf("") }
     var referencePath by remember { mutableStateOf("") }
+    var referenceText by remember { mutableStateOf("") }
 
     val launcher = rememberFilePickerLauncher(
         type = PickerType.File(extensions = listOf("wav")),
@@ -144,6 +145,14 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
                         )
                     }
                 }
+                OutlinedTextField(
+                    value = referenceText,
+                    onValueChange = { referenceText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Reference Transcript for ICL Prompt (optional)") },
+                    minLines = 2,
+                    maxLines = 4
+                )
                 if (error != null) {
                     Text(error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
@@ -162,16 +171,17 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
                             File(referencePath).nameWithoutExtension
                         }
                         val nameToUse = presetName.ifBlank { fallbackName }
-                        viewModel.createVoicePreset(nameToUse, referencePath, modelDir, modelName, backendPreference)
+                        viewModel.createVoicePreset(nameToUse, referencePath, referenceText, modelDir, modelName, backendPreference)
                         presetName = ""
                         referencePath = ""
+                        referenceText = ""
                     },
                     enabled = referencePath.isNotBlank() && !isCreating && !recordingState.isRecording && supportsCloning
                 ) {
                     if (isCreating) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.size(8.dp))
-                        Text("Generating Embeddings...")
+                        Text("Generating Preset...")
                     } else {
                         Icon(Icons.Default.Add, contentDescription = null)
                         Spacer(Modifier.size(8.dp))
@@ -191,6 +201,7 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
                     isCreating = isCreating,
                     modelDir = modelDir,
                     onGenerateMissing = { dim -> viewModel.createMissingSpeakerEmbedding(preset.id, dim, modelDir, backendPreference) },
+                    onGenerateMissingIcl = { dim -> viewModel.createMissingIclPrompt(preset.id, dim, modelDir, backendPreference) },
                     onDelete = { viewModel.deleteVoicePreset(preset.id) }
                 )
             }
@@ -210,6 +221,7 @@ private fun VoicePresetCard(
     isCreating: Boolean,
     modelDir: String,
     onGenerateMissing: (Int) -> Unit,
+    onGenerateMissingIcl: (Int) -> Unit,
     onDelete: () -> Unit
 ) {
     Card(
@@ -230,7 +242,7 @@ private fun VoicePresetCard(
                     if (preset.isSystem) {
                         "Built-in model voice"
                     } else if (preset.referenceWav == null) {
-                        "Generated speaker embedding"
+                        "Generated voice preset"
                     } else {
                         "Reference: ${preset.referenceWav}"
                     },
@@ -256,6 +268,28 @@ private fun VoicePresetCard(
                                     contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                                 ) {
                                     Text("Generate D$dim")
+                                }
+                            }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        listOf(1024, 2048).forEach { dim ->
+                            val exists = preset.iclPrompts.containsKey(dim)
+                            if (exists) {
+                                OutlinedButton(
+                                    onClick = {},
+                                    enabled = false,
+                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text("ICL D$dim ready")
+                                }
+                            } else {
+                                TextButton(
+                                    onClick = { onGenerateMissingIcl(dim) },
+                                    enabled = !isCreating && modelDir.isNotBlank() && !preset.referenceText.isNullOrBlank(),
+                                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text("Generate ICL D$dim")
                                 }
                             }
                         }
