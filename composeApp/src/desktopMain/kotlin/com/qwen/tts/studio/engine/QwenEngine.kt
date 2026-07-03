@@ -85,6 +85,11 @@ class QwenEngine {
         val confidence: Float
     )
 
+    data class NativeOperationResult(
+        val success: Boolean,
+        val errorMsg: String? = null
+    )
+
     interface StreamingAudioCallback {
         fun onAudioChunk(
             audio: FloatArray,
@@ -419,6 +424,7 @@ class QwenEngine {
         outputPath: String
     ): Boolean
     private external fun nativeGetAvailableSpeakers(ptr: Long): String?
+    private external fun nativeGetLastError(ptr: Long): String?
     private external fun nativeGetModelCapabilities(ptr: Long): NativeCapabilities?
 
     /**
@@ -742,39 +748,64 @@ class QwenEngine {
      * @return true if the extraction was successful.
      */
     fun extractSpeakerEmbedding(referenceWav: String, outputPath: String): Boolean {
-        if (referenceWav.isBlank() || outputPath.isBlank()) return false
+        return extractSpeakerEmbeddingDetailed(referenceWav, outputPath).success
+    }
 
-        if (useCliFallback) {
-            return extractSpeakerEmbeddingViaCli(referenceWav, outputPath)
+    fun extractSpeakerEmbeddingDetailed(referenceWav: String, outputPath: String): NativeOperationResult {
+        if (referenceWav.isBlank() || outputPath.isBlank()) {
+            return NativeOperationResult(false, "Reference WAV or output path is blank.")
         }
 
-        if (nativePtr == 0L) return false
+        if (useCliFallback) {
+            val ok = extractSpeakerEmbeddingViaCli(referenceWav, outputPath)
+            return NativeOperationResult(ok, if (ok) null else "CLI speaker embedding extraction failed. See terminal log for details.")
+        }
+
+        if (nativePtr == 0L) return NativeOperationResult(false, "Native engine is not loaded.")
 
         return try {
-            nativeExtractSpeakerEmbedding(nativePtr, referenceWav, outputPath)
+            val ok = nativeExtractSpeakerEmbedding(nativePtr, referenceWav, outputPath)
+            if (ok) {
+                NativeOperationResult(true)
+            } else {
+                NativeOperationResult(false, nativeGetLastError(nativePtr).takeUnless { it.isNullOrBlank() })
+            }
         } catch (e: Throwable) {
             e.printStackTrace()
-            false
+            NativeOperationResult(false, e.message ?: e::class.simpleName)
         }
     }
 
     fun extractIclPrompt(referenceWav: String, referenceText: String, outputPath: String): Boolean {
-        if (referenceWav.isBlank() || referenceText.isBlank() || outputPath.isBlank()) return false
+        return extractIclPromptDetailed(referenceWav, referenceText, outputPath).success
+    }
 
-        if (useCliFallback) {
-            return extractIclPromptViaCli(referenceWav, referenceText, outputPath)
+    fun extractIclPromptDetailed(referenceWav: String, referenceText: String, outputPath: String): NativeOperationResult {
+        if (referenceWav.isBlank() || referenceText.isBlank() || outputPath.isBlank()) {
+            return NativeOperationResult(false, "Reference WAV, reference text, or output path is blank.")
         }
 
-        if (nativePtr == 0L) return false
+        if (useCliFallback) {
+            val ok = extractIclPromptViaCli(referenceWav, referenceText, outputPath)
+            return NativeOperationResult(ok, if (ok) null else "CLI ICL prompt extraction failed. See terminal log for details.")
+        }
+
+        if (nativePtr == 0L) return NativeOperationResult(false, "Native engine is not loaded.")
 
         return try {
-            nativeExtractIclPrompt(nativePtr, referenceWav, referenceText, outputPath)
+            val ok = nativeExtractIclPrompt(nativePtr, referenceWav, referenceText, outputPath)
+            if (ok) {
+                NativeOperationResult(true)
+            } else {
+                NativeOperationResult(false, nativeGetLastError(nativePtr).takeUnless { it.isNullOrBlank() })
+            }
         } catch (e: UnsatisfiedLinkError) {
-            System.err.println("[QwenEngine] ICL prompt extraction JNI is unavailable. Rebuild qwen3_tts.dll after updating qwen3-tts.cpp: ${e.message}")
-            false
+            val message = "ICL prompt extraction is unavailable in the loaded native library. Rebuild qwen3_tts.dll after updating qwen3-tts.cpp."
+            System.err.println("[QwenEngine] $message ${e.message}")
+            NativeOperationResult(false, message)
         } catch (e: Throwable) {
             e.printStackTrace()
-            false
+            NativeOperationResult(false, e.message ?: e::class.simpleName)
         }
     }
 

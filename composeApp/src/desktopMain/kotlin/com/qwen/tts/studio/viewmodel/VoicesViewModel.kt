@@ -204,6 +204,7 @@ class VoicesViewModel : ViewModel() {
                 var lastSupportsCloning = false
                 var lastEmbeddingDim = 0
                 var iclPromptWarning: String? = null
+                val extractionErrors = mutableListOf<String>()
 
                 for (targetModel in targetModels) {
                     val inferredTargetDim = inferEmbeddingDimFromModelName(targetModel)
@@ -217,10 +218,8 @@ class VoicesViewModel : ViewModel() {
 
                     val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, targetModel, backendPreference) }
                     if (!loaded) {
-                        deleteEmbeddingFiles(extractedEmbeddings.values)
-                        deleteIclPromptFiles(extractedIclPrompts.values)
-                        _error.value = "Failed to load $targetModel for speaker embedding extraction."
-                        return@launch
+                        extractionErrors += "Failed to load $targetModel for speaker embedding extraction."
+                        continue
                     }
 
                     val caps = withContext(nativeDispatcher) { qwenEngine.getModelCapabilities() }
@@ -237,14 +236,13 @@ class VoicesViewModel : ViewModel() {
 
                     if (!extractedEmbeddings.containsKey(embeddingDim)) {
                         val embeddingFile = File(embeddingsDir, "$voiceId-d$embeddingDim.json")
-                        val extracted = withContext(nativeDispatcher) {
-                            qwenEngine.extractSpeakerEmbedding(wavFile.absolutePath, embeddingFile.absolutePath)
+                        val extraction = withContext(nativeDispatcher) {
+                            qwenEngine.extractSpeakerEmbeddingDetailed(wavFile.absolutePath, embeddingFile.absolutePath)
                         }
-                        if (!extracted) {
-                            deleteEmbeddingFiles(extractedEmbeddings.values + embeddingFile.absolutePath)
-                            deleteIclPromptFiles(extractedIclPrompts.values)
-                            _error.value = "Failed to extract D$embeddingDim speaker embedding with $targetModel."
-                            return@launch
+                        if (!extraction.success) {
+                            deleteEmbeddingFiles(listOf(embeddingFile.absolutePath))
+                            extractionErrors += "Failed to extract D$embeddingDim speaker embedding with $targetModel: ${extraction.errorMsg ?: "Unknown native error"}"
+                            continue
                         }
                         extractedEmbeddings[embeddingDim] = embeddingFile.absolutePath
                     }
@@ -259,12 +257,12 @@ class VoicesViewModel : ViewModel() {
                             iclPromptWarning = "Speaker preset created, but ICL prompt extraction is unavailable. Rebuild the native backend, then generate the ICL prompt from this preset."
                             continue
                         }
-                        val iclExtracted = withContext(nativeDispatcher) {
-                            qwenEngine.extractIclPrompt(wavFile.absolutePath, trimmedReferenceText, iclPromptFile.absolutePath)
+                        val iclExtraction = withContext(nativeDispatcher) {
+                            qwenEngine.extractIclPromptDetailed(wavFile.absolutePath, trimmedReferenceText, iclPromptFile.absolutePath)
                         }
-                        if (!iclExtracted) {
+                        if (!iclExtraction.success) {
                             deleteIclPromptFiles(extractedIclPrompts.values + iclPromptFile.absolutePath)
-                            iclPromptWarning = "Speaker preset created, but D$embeddingDim ICL prompt extraction failed with $targetModel."
+                            iclPromptWarning = "Speaker preset created, but D$embeddingDim ICL prompt extraction failed with $targetModel: ${iclExtraction.errorMsg ?: "Unknown native error"}"
                             continue
                         }
                         extractedIclPrompts[embeddingDim] = iclPromptFile.absolutePath
@@ -274,7 +272,8 @@ class VoicesViewModel : ViewModel() {
                 if (extractedEmbeddings.isEmpty() && extractedIclPrompts.isEmpty()) {
                     _supportsCloning.value = lastSupportsCloning
                     _currentEmbeddingDim.value = lastEmbeddingDim
-                    _error.value = "No installed model supports custom voice clone extraction."
+                    _error.value = extractionErrors.firstOrNull()
+                        ?: "No installed model supports custom voice clone extraction."
                     return@launch
                 }
 
@@ -288,7 +287,9 @@ class VoicesViewModel : ViewModel() {
                 )
                 _voices.value = _voices.value + preset
                 saveVoices()
-                _error.value = iclPromptWarning
+                _error.value = iclPromptWarning ?: extractionErrors.firstOrNull()?.let {
+                    "Speaker preset created, but $it"
+                }
             } finally {
                 _isCreating.value = false
             }
@@ -365,11 +366,12 @@ class VoicesViewModel : ViewModel() {
                         continue
                     }
 
-                    extracted = withContext(nativeDispatcher) {
-                        qwenEngine.extractSpeakerEmbedding(referenceWav, embeddingFile.absolutePath)
+                    val extraction = withContext(nativeDispatcher) {
+                        qwenEngine.extractSpeakerEmbeddingDetailed(referenceWav, embeddingFile.absolutePath)
                     }
+                    extracted = extraction.success
                     if (extracted) break
-                    lastError = "Failed to extract D$targetDim with $targetModel."
+                    lastError = "Failed to extract D$targetDim with $targetModel: ${extraction.errorMsg ?: "Unknown native error"}"
                 }
 
                 if (!extracted) {
@@ -466,11 +468,12 @@ class VoicesViewModel : ViewModel() {
                         continue
                     }
 
-                    extracted = withContext(nativeDispatcher) {
-                        qwenEngine.extractIclPrompt(referenceWav, referenceText, iclPromptFile.absolutePath)
+                    val extraction = withContext(nativeDispatcher) {
+                        qwenEngine.extractIclPromptDetailed(referenceWav, referenceText, iclPromptFile.absolutePath)
                     }
+                    extracted = extraction.success
                     if (extracted) break
-                    lastError = "Failed to extract D$targetDim ICL prompt with $targetModel."
+                    lastError = "Failed to extract D$targetDim ICL prompt with $targetModel: ${extraction.errorMsg ?: "Unknown native error"}"
                 }
 
                 if (!extracted) {
