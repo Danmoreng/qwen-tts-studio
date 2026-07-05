@@ -67,21 +67,14 @@ data class EmbeddingBlendSource(
 /**
  * ViewModel for managing custom voice presets and speaker embedding extraction.
  */
-class VoicesViewModel : ViewModel() {
+class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath) : ViewModel() {
     private val defaultVoice = VoicePreset(
         id = "default",
         name = "Default Voice (Model)",
         referenceWav = null
     )
 
-    private val storageFile = File(
-        File(System.getProperty("user.home"), ".qwen-tts-studio"),
-        "voice-presets.tsv"
-    )
-    private val recordingsDir = File(
-        File(System.getProperty("user.home"), ".qwen-tts-studio"),
-        "recordings"
-    )
+    private var appDirectory = resolveAppDirectory(initialAppDir)
 
     private val _voices = MutableStateFlow(loadVoices())
     /** List of all available voice presets, including the default system voice. */
@@ -127,6 +120,20 @@ class VoicesViewModel : ViewModel() {
         private const val PIPEWIRE_SOURCE_RECORDING_VOLUME = 0.05f
         private const val CLIPPING_SAMPLE_THRESHOLD = 0.01
         private const val RECORDING_POST_PROCESS_FILTER = "highpass=f=90,lowpass=f=9000,loudnorm=I=-18:TP=-3:LRA=11,aresample=48000"
+
+        private fun defaultAppDirectory(): File =
+            File(System.getProperty("user.home"), ".qwen-tts-studio")
+
+        private fun resolveAppDirectory(path: String): File =
+            File(path.trim().ifBlank { defaultAppDirectory().absolutePath }).absoluteFile
+    }
+
+    fun setAppDir(path: String) {
+        val next = resolveAppDirectory(path)
+        if (next == appDirectory) return
+        appDirectory = next
+        _voices.value = loadVoices()
+        _error.value = null
     }
 
     /**
@@ -500,7 +507,7 @@ class VoicesViewModel : ViewModel() {
         if (_isCreating.value || _recordingState.value.isRecording) return
 
         _error.value = null
-        recordingsDir.mkdirs()
+        val recordingsDir = recordingsDirectory().apply { mkdirs() }
         val outputFile = File(recordingsDir, "recording-${System.currentTimeMillis()}.wav")
 
         if (startPipeWireRecording(outputFile)) {
@@ -772,6 +779,7 @@ class VoicesViewModel : ViewModel() {
     }
 
     private fun loadVoices(): List<VoicePreset> {
+        val storageFile = storageFile()
         val clones = if (storageFile.exists()) {
             storageFile.readLines()
                 .mapNotNull { line ->
@@ -812,6 +820,7 @@ class VoicesViewModel : ViewModel() {
     }
 
     private fun saveVoices() {
+        val storageFile = storageFile()
         storageFile.parentFile?.mkdirs()
         val lines = _voices.value
             .filterNot { it.isSystem }
@@ -891,17 +900,19 @@ class VoicesViewModel : ViewModel() {
     }
 
     private fun embeddingsDirectory(): File {
-        return File(
-            File(System.getProperty("user.home"), ".qwen-tts-studio"),
-            "embeddings"
-        )
+        return File(appDirectory, "embeddings")
     }
 
     private fun iclPromptsDirectory(): File {
-        return File(
-            File(System.getProperty("user.home"), ".qwen-tts-studio"),
-            "icl-prompts"
-        )
+        return File(appDirectory, "icl-prompts")
+    }
+
+    private fun recordingsDirectory(): File {
+        return File(appDirectory, "recordings")
+    }
+
+    private fun storageFile(): File {
+        return File(appDirectory, "voice-presets.tsv")
     }
 
     private fun deleteEmbeddingFiles(paths: Collection<String>) {

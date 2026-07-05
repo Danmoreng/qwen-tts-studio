@@ -81,12 +81,13 @@ fun WelcomeSetupScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Qwen-TTS Studio", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
                     Text(
-                        "Choose where your GGUF models live, or download a starter set from Hugging Face.",
+                        "Choose where app data and GGUF models live, or download a starter set from Hugging Face.",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
+                AppDirectorySection(viewModel)
                 ModelDirectorySection(viewModel)
                 ModelDownloadSection(viewModel)
 
@@ -146,6 +147,8 @@ fun SetupScreen(viewModel: SettingsViewModel) {
                 Column(modifier = Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(22.dp)) {
                     Text("Local Model Configuration", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
 
+                    AppDirectorySection(viewModel)
+
                     ModelDirectorySection(viewModel)
 
                     BackendSection(viewModel)
@@ -165,6 +168,42 @@ fun SetupScreen(viewModel: SettingsViewModel) {
             }
 
             ModelDownloadSection(viewModel)
+        }
+    }
+}
+
+@Composable
+private fun AppDirectorySection(viewModel: SettingsViewModel) {
+    val appDir by viewModel.appDir.collectAsState()
+    val launcher = rememberDirectoryPickerLauncher(title = "Select App Data Directory") { directory ->
+        directory?.path?.let { viewModel.setAppDir(it) }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("App Directory", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            "Stores voice presets, recordings, speaker embeddings, and ICL prompt files.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedTextField(
+                value = appDir,
+                onValueChange = { viewModel.setAppDir(it) },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                placeholder = { Text("Select folder...") },
+                shape = MaterialTheme.shapes.medium
+            )
+            Button(
+                onClick = { launcher.launch() },
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.height(56.dp)
+            ) {
+                Icon(Icons.Default.FolderOpen, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Browse")
+            }
         }
     }
 }

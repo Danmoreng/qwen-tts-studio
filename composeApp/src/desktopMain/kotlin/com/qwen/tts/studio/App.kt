@@ -60,9 +60,14 @@ fun App(
     // Shared ViewModels
     val settingsViewModel: SettingsViewModel = viewModel { SettingsViewModel() }
     val studioViewModel: StudioViewModel = viewModel { StudioViewModel() }
-    val voicesViewModel: VoicesViewModel = viewModel { VoicesViewModel() }
+    val voicesViewModel: VoicesViewModel = viewModel { VoicesViewModel(settingsViewModel.appDir.value) }
+    val appDir by settingsViewModel.appDir.collectAsState()
     val showWelcome by settingsViewModel.showWelcome.collectAsState()
     val backendPreference by settingsViewModel.backendPreference.collectAsState()
+
+    LaunchedEffect(appDir) {
+        voicesViewModel.setAppDir(appDir)
+    }
 
     LaunchedEffect(backendPreference) {
         studioViewModel.releaseEngine()

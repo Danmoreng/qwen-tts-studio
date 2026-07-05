@@ -19,6 +19,7 @@ import java.net.http.HttpResponse
 import java.nio.file.StandardCopyOption
 import java.time.Duration
 import java.util.Properties
+import java.util.prefs.Preferences
 
 data class ModelDownloadFile(
     val fileName: String,
@@ -112,15 +113,18 @@ class SettingsViewModel : ViewModel() {
             ModelDownloadFile(fileName, "$HF_BASE_URL/$fileName?download=true", fileSizes[fileName] ?: 0L)
     }
 
-    private val appDir = File(System.getProperty("user.home"), ".qwen-tts-studio")
-    private val settingsFile = File(appDir, "settings.properties")
-    private val defaultModelDir = File(appDir, "models").absolutePath
+    private val defaultAppDir = File(System.getProperty("user.home"), ".qwen-tts-studio")
+    private val preferences = Preferences.userNodeForPackage(SettingsViewModel::class.java)
     private val defaultModelName = "qwen-talker-0.6b-base-Q8_0.gguf"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val httpClient = HttpClient.newBuilder()
         .followRedirects(HttpClient.Redirect.NORMAL)
         .connectTimeout(Duration.ofSeconds(30))
         .build()
+
+    private val _appDir = MutableStateFlow(loadAppDir())
+    /** The directory where app data such as voice presets and recordings are stored. */
+    val appDir = _appDir.asStateFlow()
 
     private val _modelDir = MutableStateFlow(loadModelDir())
     /** The directory where Qwen3 models are stored. */
@@ -150,8 +154,9 @@ class SettingsViewModel : ViewModel() {
     val showWelcome = _showWelcome.asStateFlow()
 
     init {
-        if (!appDir.exists()) {
-            appDir.mkdirs()
+        File(_appDir.value).mkdirs()
+        if (_modelDir.value.isBlank()) {
+            _modelDir.value = defaultModelDir()
         }
         if (_modelName.value.isBlank()) {
             _modelName.value = _availableModelNames.value.firstOrNull() ?: defaultModelName
@@ -163,45 +168,66 @@ class SettingsViewModel : ViewModel() {
         }
     }
 
-    private fun loadModelDir(): String {
-        if (settingsFile.exists()) {
+    private fun defaultModelDir(): String = File(_appDir.value.ifBlank { defaultAppDir.absolutePath }, "models").absolutePath
+
+    private fun settingsFile(): File = File(_appDir.value.ifBlank { defaultAppDir.absolutePath }, "settings.properties")
+
+    private fun legacySettingsFile(): File = File(defaultAppDir, "settings.properties")
+
+    private fun loadSettingsProperties(): Properties? {
+        val file = settingsFile().takeIf { it.exists() } ?: legacySettingsFile().takeIf { it.exists() }
+        if (file != null) {
             try {
-                val props = Properties()
-                settingsFile.inputStream().use { props.load(it) }
-                return props.getProperty("modelDir", defaultModelDir)
+                return Properties().apply {
+                    file.inputStream().use { load(it) }
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
         }
-        return defaultModelDir
+        return null
     }
 
-    private fun loadModelName(): String {
-        if (settingsFile.exists()) {
+    private fun loadAppDir(): String {
+        preferences.get("appDir", null)
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { return it }
+
+        val legacySettingsFile = legacySettingsFile()
+        if (legacySettingsFile.exists()) {
             try {
                 val props = Properties()
-                settingsFile.inputStream().use { props.load(it) }
-                val direct = props.getProperty("modelName", "").trim()
-                if (direct.isNotBlank()) return direct
-                val variant = props.getProperty("modelVariant", "").trim()
-                if (variant == "1.7B") return "qwen-talker-1.7b-base-Q8_0.gguf"
-                if (variant == "0.6B") return "qwen-talker-0.6b-base-Q8_0.gguf"
+                legacySettingsFile.inputStream().use { props.load(it) }
+                return props.getProperty("appDir", defaultAppDir.absolutePath).trim().ifBlank { defaultAppDir.absolutePath }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
+        }
+        return defaultAppDir.absolutePath
+    }
+
+    private fun loadModelDir(): String {
+        loadSettingsProperties()?.let { props ->
+            return props.getProperty("modelDir", defaultModelDir())
+        }
+        return defaultModelDir()
+    }
+
+    private fun loadModelName(): String {
+        loadSettingsProperties()?.let { props ->
+            val direct = props.getProperty("modelName", "").trim()
+            if (direct.isNotBlank()) return direct
+            val variant = props.getProperty("modelVariant", "").trim()
+            if (variant == "1.7B") return "qwen-talker-1.7b-base-Q8_0.gguf"
+            if (variant == "0.6B") return "qwen-talker-0.6b-base-Q8_0.gguf"
         }
         return defaultModelName
     }
 
     private fun loadWelcomeDismissed(): Boolean {
-        if (settingsFile.exists()) {
-            try {
-                val props = Properties()
-                settingsFile.inputStream().use { props.load(it) }
-                return props.getProperty("welcomeDismissed", "false").toBoolean()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+        loadSettingsProperties()?.let { props ->
+            return props.getProperty("welcomeDismissed", "false").toBoolean()
         }
         return false
     }
@@ -212,14 +238,8 @@ class SettingsViewModel : ViewModel() {
             ?.takeIf { it.isNotBlank() }
             ?.let { return NativeBackendPreference.fromId(it) }
 
-        if (settingsFile.exists()) {
-            try {
-                val props = Properties()
-                settingsFile.inputStream().use { props.load(it) }
-                return NativeBackendPreference.fromId(props.getProperty("backendPreference", "auto"))
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+        loadSettingsProperties()?.let { props ->
+            return NativeBackendPreference.fromId(props.getProperty("backendPreference", "auto"))
         }
         return NativeBackendPreference.Auto
     }
@@ -270,21 +290,31 @@ class SettingsViewModel : ViewModel() {
 
     private fun saveAll() {
         try {
-            if (!appDir.exists()) appDir.mkdirs()
-            val props = Properties()
-            if (settingsFile.exists()) {
-                settingsFile.inputStream().use { props.load(it) }
-            }
+            val file = settingsFile()
+            file.parentFile?.mkdirs()
+            val props = loadSettingsProperties() ?: Properties()
+            props.setProperty("appDir", _appDir.value)
             props.setProperty("modelDir", _modelDir.value)
             props.setProperty("modelName", _modelName.value)
             props.setProperty("backendPreference", _backendPreference.value.id)
             props.setProperty("welcomeDismissed", (!_showWelcome.value).toString())
             // Clean up old key so future reads don't depend on it.
             props.remove("modelVariant")
-            settingsFile.outputStream().use { props.store(it, "Qwen-TTS Studio Settings") }
+            file.outputStream().use { props.store(it, "Qwen-TTS Studio Settings") }
+            preferences.put("appDir", _appDir.value)
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    /**
+     * Updates the app data directory used for presets, recordings, and generated voice artifacts.
+     *
+     * @param path The new app data directory path.
+     */
+    fun setAppDir(path: String) {
+        _appDir.value = path
+        saveAll()
     }
 
     /**

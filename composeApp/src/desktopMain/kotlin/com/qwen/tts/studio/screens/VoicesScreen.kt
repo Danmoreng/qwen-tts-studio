@@ -165,7 +165,7 @@ fun VoicesScreen(viewModel: VoicesViewModel, settingsViewModel: SettingsViewMode
                 }
                 Button(
                     onClick = {
-                        val fallbackName = if (referencePath.contains(".qwen-tts-studio${File.separator}recordings")) {
+                        val fallbackName = if (referencePath == recordingState.lastRecordingPath) {
                             "Recorded Voice"
                         } else {
                             File(referencePath).nameWithoutExtension
