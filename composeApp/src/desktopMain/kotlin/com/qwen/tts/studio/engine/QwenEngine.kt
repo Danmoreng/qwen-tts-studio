@@ -410,6 +410,7 @@ class QwenEngine {
         text: String,
         referenceWav: String?,
         speakerEmbeddingPath: String?,
+        iclPromptPath: String?,
         params: Any?,
         chunkSeconds: Float,
         leftContextSeconds: Float,
@@ -611,22 +612,6 @@ class QwenEngine {
         }
 
         if (nativePtr == 0L) return null
-        if (!iclPromptPath.isNullOrBlank()) {
-            val audio = generate(
-                text = text,
-                referenceWav = null,
-                speakerEmbeddingPath = null,
-                iclPromptPath = iclPromptPath,
-                languageId = languageId,
-                instruction = instruction,
-                speaker = speaker
-            )
-            return if (audio != null) {
-                NativeResult(audio, 24_000, true, null, 0L)
-            } else {
-                NativeResult(null, 24_000, false, "ICL prompt streaming is unavailable in this JNI build.", 0L)
-            }
-        }
 
         return try {
             val params = NativeParams(languageId = languageId, instruction = instruction, speaker = speaker)
@@ -664,6 +649,7 @@ class QwenEngine {
                 text,
                 referenceWav,
                 speakerEmbeddingPath,
+                iclPromptPath,
                 params,
                 options.chunkSeconds,
                 options.leftContextSeconds,

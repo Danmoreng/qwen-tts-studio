@@ -301,7 +301,7 @@ class StudioViewModel : ViewModel() {
                         null
                     }
 
-                    if (latestState.useStreaming && effectiveIclPrompt == null) {
+                    if (latestState.useStreaming) {
                         generationUsedStreaming = true
                         streamingGenerationActive = true
                         val streamedChunks = mutableListOf<FloatArray>()
