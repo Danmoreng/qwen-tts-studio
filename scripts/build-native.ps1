@@ -69,11 +69,35 @@ function Import-VSEnv {
 
     Write-Host "Loading Visual Studio C++ environment..." -ForegroundColor DarkCyan
     $envDump = cmd /c "call `"$vcvars`" > nul && set"
+    if ($LASTEXITCODE -ne 0) { return $false }
+
+    # Environment blocks may contain both PATH and Path. vcvars updates only one
+    # of them, so importing them in output order can overwrite the MSVC entries.
+    $pathCandidates = @()
     foreach ($line in $envDump) {
         if ($line -match "^([^=]+)=(.*)$") {
-            Set-Item -Path "Env:$($matches[1])" -Value $matches[2]
+            if ($matches[1] -ieq "Path") {
+                $pathCandidates += $matches[2]
+            } else {
+                Set-Item -Path "Env:$($matches[1])" -Value $matches[2]
+            }
         }
     }
+
+    $msvcPath = $null
+    foreach ($candidate in $pathCandidates) {
+        foreach ($entry in $candidate -split ";") {
+            if (-not [string]::IsNullOrWhiteSpace($entry) -and
+                (Test-Path (Join-Path $entry "cl.exe"))) {
+                $msvcPath = $candidate
+                break
+            }
+        }
+        if ($msvcPath) { break }
+    }
+    if (-not $msvcPath) { return $false }
+
+    $env:Path = $msvcPath
     return $true
 }
 
