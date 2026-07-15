@@ -9,6 +9,7 @@ Qwen-TTS Studio is a modern desktop application for high-quality, local text-to-
 - **Local Inference:** All processing happens on your machine. No data leaves your computer.
 - **High Performance:** Powered by a native C++ engine with support for CPU and NVIDIA CUDA acceleration.
 - **Voice Cloning:** Create custom voice presets from a short reference audio clip, with reusable speaker embeddings and optional full ICL voice prompts (supported by Base models).
+- **Voice Lab:** Morph or average compatible speaker embeddings, inspect exact mix geometry, preview the result, or apply an experimental user-defined reference direction to a base voice.
 - **Instruction Control:** Use natural language prompts to control voice design, tone, emotion, and style (supported by 1.7B CustomVoice and VoiceDesign models).
 - **Named Speakers:** Built-in support for models with predefined speaker profiles.
 - **Adaptive UI:** The interface automatically adapts to the capabilities of the loaded model.
@@ -109,6 +110,19 @@ Manage your voice presets.
 - **Extract:** Upload or record a short WAV file (3-10 seconds) to extract reusable speaker embeddings.
 - **ICL Prompt:** Optionally enter the transcript of the reference audio to save a full ICL voice prompt. ICL prompts include the speaker embedding, reference text tokens, and reference speech codes for reuse.
 - **Save:** Give your custom voice a name to use it in the Studio tab. Missing embedding or ICL prompt dimensions can be generated later from the saved preset.
+
+### Voice Lab
+Create derived presets from embeddings that were extracted with the same Qwen3-TTS Base checkpoint and share the same model dimension.
+- **Morph:** Interpolate between two complete speaker embeddings.
+- **Average:** Build an equal-weight mean from two or more embeddings, optionally rescaled by norm. Averaging multiple recordings of the same speaker is an experimental use case, not a validated robustness guarantee.
+- **Reference direction (experimental):** Apply `base + strength × (toward − from)`. Prefer paired reference recordings of the same speaker, microphone, and phrase in two different styles.
+- **Norm preservation:** Optionally rescale the result to the weighted source/base L2 norm. This is a stability heuristic, not a guarantee of natural speech.
+- **Embedding geometry:** For a two-voice morph, inspect the exact local A-to-B path, current result, vector distance/cosine diagnostics, and grouped latent-coordinate differences. These plots are embedding-space geometry, not frequency bands or a perceptual similarity score.
+- **Preview before saving:** Enter a sentence and language to synthesize the current recipe through the selected Base model. The temporary embedding is deleted after generation; the resulting audio is played automatically and can be stopped or replayed.
+
+An embedding is a learned 1024- or 2048-value latent vector, not a waveform, spectrum, or 2D frequency curve. Its coordinate indices do not correspond to Hertz, time, pitch, gender, accent, or emotion. Direction percentages scale the raw distance between the selected references; they are not quality or out-of-distribution scores, and even small shifts can produce artifacts. Compare results by ear.
+
+The app currently verifies only that dimensions match; it does not store or verify the source checkpoint. Equal dimensions are necessary but not sufficient for compatibility. Speaker embeddings can contain identity-like biometric information: use recordings with consent. Derived voices are not automatically anonymous or free of source-voice rights.
 
 ### Setup
 Configure application settings and models.

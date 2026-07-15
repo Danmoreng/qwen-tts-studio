@@ -21,6 +21,7 @@ kotlin {
 
     sourceSets {
         val desktopMain = getByName("desktopMain")
+        val commonTest = getByName("commonTest")
 
         commonMain.dependencies {
             implementation(compose.runtime)
@@ -33,6 +34,10 @@ kotlin {
             implementation("org.jetbrains.compose.material:material-icons-extended:1.7.3")
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.filekit.compose)
+        }
+
+        commonTest.dependencies {
+            implementation(kotlin("test"))
         }
         
         desktopMain.dependencies {

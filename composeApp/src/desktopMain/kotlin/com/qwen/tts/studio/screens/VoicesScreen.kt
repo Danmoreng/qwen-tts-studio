@@ -261,7 +261,7 @@ private fun VoicePresetCard(
                                 ) {
                                     Text("D$dim ready")
                                 }
-                            } else {
+                            } else if (preset.referenceWav != null) {
                                 TextButton(
                                     onClick = { onGenerateMissing(dim) },
                                     enabled = !isCreating && modelDir.isNotBlank(),
@@ -283,7 +283,7 @@ private fun VoicePresetCard(
                                 ) {
                                     Text("ICL D$dim ready")
                                 }
-                            } else {
+                            } else if (preset.referenceWav != null) {
                                 TextButton(
                                     onClick = { onGenerateMissingIcl(dim) },
                                     enabled = !isCreating && modelDir.isNotBlank() && !preset.referenceText.isNullOrBlank(),

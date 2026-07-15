@@ -21,6 +21,7 @@ import com.qwen.tts.studio.screens.StudioScreen
 import com.qwen.tts.studio.screens.VoiceLabScreen
 import com.qwen.tts.studio.screens.VoicesScreen
 import com.qwen.tts.studio.screens.WelcomeSetupScreen
+import com.qwen.tts.studio.screens.rememberVoiceLabSessionState
 import com.qwen.tts.studio.theme.AppTheme
 import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import com.qwen.tts.studio.viewmodel.StudioViewModel
@@ -61,6 +62,7 @@ fun App(
     val settingsViewModel: SettingsViewModel = viewModel { SettingsViewModel() }
     val studioViewModel: StudioViewModel = viewModel { StudioViewModel() }
     val voicesViewModel: VoicesViewModel = viewModel { VoicesViewModel(settingsViewModel.appDir.value) }
+    val voiceLabSessionState = rememberVoiceLabSessionState()
     val appDir by settingsViewModel.appDir.collectAsState()
     val showWelcome by settingsViewModel.showWelcome.collectAsState()
     val backendPreference by settingsViewModel.backendPreference.collectAsState()
@@ -142,7 +144,11 @@ fun App(
                         when (currentScreen) {
                             Screen.Studio -> StudioScreen(studioViewModel, settingsViewModel, voicesViewModel)
                             Screen.Voices -> VoicesScreen(voicesViewModel, settingsViewModel)
-                            Screen.VoiceLab -> VoiceLabScreen(voicesViewModel)
+                            Screen.VoiceLab -> VoiceLabScreen(
+                                viewModel = voicesViewModel,
+                                settingsViewModel = settingsViewModel,
+                                sessionState = voiceLabSessionState
+                            )
                             Screen.Setup -> SetupScreen(settingsViewModel)
                         }
                     }

@@ -2,8 +2,10 @@ package com.qwen.tts.studio.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.qwen.tts.studio.embedding.EmbeddingArithmetic
 import com.qwen.tts.studio.engine.NativeBackendPreference
 import com.qwen.tts.studio.engine.QwenEngine
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -20,15 +22,19 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.Base64
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import kotlin.math.sqrt
+import java.util.concurrent.atomic.AtomicLong
 import javax.sound.sampled.AudioFileFormat
 import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioInputStream
 import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.DataLine
+import javax.sound.sampled.SourceDataLine
 import javax.sound.sampled.TargetDataLine
 
 /**
@@ -62,6 +68,51 @@ data class VoiceRecordingState(
 data class EmbeddingBlendSource(
     val voiceId: String,
     val weight: Float
+)
+
+sealed interface VoiceLabRecipe {
+    val normalize: Boolean
+
+    data class WeightedMean(
+        val sources: List<EmbeddingBlendSource>,
+        override val normalize: Boolean
+    ) : VoiceLabRecipe
+
+    data class Direction(
+        val baseVoiceId: String,
+        val fromVoiceId: String,
+        val towardVoiceId: String,
+        val strength: Float,
+        override val normalize: Boolean
+    ) : VoiceLabRecipe
+}
+
+data class LoadedVoiceEmbedding(
+    val voiceId: String,
+    val name: String,
+    val dimension: Int,
+    val values: FloatArray
+)
+
+data class VoiceLabPreviewState(
+    val isGenerating: Boolean = false,
+    val isPlaying: Boolean = false,
+    val hasAudio: Boolean = false,
+    val durationSeconds: Float = 0f,
+    val waveform: List<Float> = emptyList(),
+    val error: String? = null
+)
+
+private enum class VoiceEngineSessionKind {
+    Talker,
+    IclPromptEncoder
+}
+
+private data class VoiceEngineSessionKey(
+    val modelDirectory: String,
+    val modelName: String?,
+    val backendPreference: NativeBackendPreference,
+    val kind: VoiceEngineSessionKind
 )
 
 /**
@@ -99,18 +150,30 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
     private val _recordingState = MutableStateFlow(VoiceRecordingState())
     val recordingState: StateFlow<VoiceRecordingState> = _recordingState.asStateFlow()
 
+    private val _voiceLabPreviewState = MutableStateFlow(VoiceLabPreviewState())
+    val voiceLabPreviewState: StateFlow<VoiceLabPreviewState> = _voiceLabPreviewState.asStateFlow()
+
     private val qwenEngine = QwenEngine()
-    private val nativeDispatcher = Executors.newSingleThreadExecutor { runnable ->
+    private val nativeExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(null, runnable, "QwenVoicePresetThread", 8L * 1024 * 1024).apply {
             isDaemon = true
         }
-    }.asCoroutineDispatcher()
+    }
+    private val nativeDispatcher = nativeExecutor.asCoroutineDispatcher()
+    private var loadedEngineSession: VoiceEngineSessionKey? = null
     private var recordingJob: Job? = null
     private var recordingTimerJob: Job? = null
+    private var previewGenerationJob: Job? = null
+    private var previewPlaybackJob: Job? = null
+    private val previewRequestVersion = AtomicLong(0L)
+    private val previewPlaybackVersion = AtomicLong(0L)
+    private var previewAudio: FloatArray? = null
     @Volatile
     private var recordingLine: TargetDataLine? = null
     @Volatile
     private var recordingProcess: Process? = null
+    @Volatile
+    private var previewPlaybackLine: SourceDataLine? = null
 
     private companion object {
         private const val RECORDING_BUFFER_MILLIS = 100
@@ -120,6 +183,9 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
         private const val PIPEWIRE_SOURCE_RECORDING_VOLUME = 0.05f
         private const val CLIPPING_SAMPLE_THRESHOLD = 0.01
         private const val RECORDING_POST_PROCESS_FILTER = "highpass=f=90,lowpass=f=9000,loudnorm=I=-18:TP=-3:LRA=11,aresample=48000"
+        private const val PREVIEW_SAMPLE_RATE = 24_000
+        private const val PREVIEW_PLAYBACK_CHUNK_SAMPLES = 1_024
+        private const val PREVIEW_WAVEFORM_BUCKETS = 96
 
         private fun defaultAppDirectory(): File =
             File(System.getProperty("user.home"), ".qwen-tts-studio")
@@ -131,9 +197,63 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
     fun setAppDir(path: String) {
         val next = resolveAppDirectory(path)
         if (next == appDirectory) return
+        invalidateVoiceLabPreview()
         appDirectory = next
         _voices.value = loadVoices()
         _error.value = null
+    }
+
+    private fun loadTalkerEngine(
+        modelDir: String,
+        modelName: String?,
+        backendPreference: NativeBackendPreference
+    ): Boolean = loadEngineSession(
+        modelDir = modelDir,
+        modelName = modelName,
+        backendPreference = backendPreference,
+        kind = VoiceEngineSessionKind.Talker
+    )
+
+    private fun loadIclPromptEngine(
+        modelDir: String,
+        modelName: String?,
+        backendPreference: NativeBackendPreference
+    ): Boolean = loadEngineSession(
+        modelDir = modelDir,
+        modelName = modelName,
+        backendPreference = backendPreference,
+        kind = VoiceEngineSessionKind.IclPromptEncoder
+    )
+
+    private fun loadEngineSession(
+        modelDir: String,
+        modelName: String?,
+        backendPreference: NativeBackendPreference,
+        kind: VoiceEngineSessionKind
+    ): Boolean {
+        val normalizedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
+        val requestedSession = VoiceEngineSessionKey(
+            modelDirectory = File(modelDir).absolutePath,
+            modelName = normalizedModelName,
+            backendPreference = backendPreference,
+            kind = kind
+        )
+        if (loadedEngineSession == requestedSession) return true
+
+        loadedEngineSession = null
+        val loaded = when (kind) {
+            VoiceEngineSessionKind.Talker ->
+                qwenEngine.load(modelDir, normalizedModelName, backendPreference)
+            VoiceEngineSessionKind.IclPromptEncoder ->
+                qwenEngine.loadIclPromptEncoder(modelDir, normalizedModelName, backendPreference)
+        }
+        if (loaded) loadedEngineSession = requestedSession
+        return loaded
+    }
+
+    private fun releaseLoadedEngine() {
+        loadedEngineSession = null
+        qwenEngine.release()
     }
 
     /**
@@ -150,7 +270,9 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
         if (modelDir.isBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
             val resolvedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
-            val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, resolvedModelName, backendPreference) }
+            val loaded = withContext(nativeDispatcher) {
+                loadTalkerEngine(modelDir, resolvedModelName, backendPreference)
+            }
             if (!loaded) return@launch
             val caps = withContext(nativeDispatcher) { qwenEngine.getModelCapabilities() }
             _supportsCloning.value = caps?.supportsCloning ?: true
@@ -223,7 +345,9 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
                         continue
                     }
 
-                    val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, targetModel, backendPreference) }
+                    val loaded = withContext(nativeDispatcher) {
+                        loadTalkerEngine(modelDir, targetModel, backendPreference)
+                    }
                     if (!loaded) {
                         extractionErrors += "Failed to load $targetModel for speaker embedding extraction."
                         continue
@@ -257,7 +381,7 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
                     if (trimmedReferenceText.isNotBlank() && !extractedIclPrompts.containsKey(embeddingDim)) {
                         val iclPromptFile = File(iclPromptsDir, "$voiceId-d$embeddingDim.json")
                         val iclLoaded = withContext(nativeDispatcher) {
-                            qwenEngine.loadIclPromptEncoder(modelDir, targetModel, backendPreference)
+                            loadIclPromptEngine(modelDir, targetModel, backendPreference)
                         }
                         if (!iclLoaded) {
                             deleteIclPromptFiles(extractedIclPrompts.values + iclPromptFile.absolutePath)
@@ -356,7 +480,9 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
                 var extracted = false
                 var lastError: String? = null
                 for (targetModel in targetModels) {
-                    val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, targetModel, backendPreference) }
+                    val loaded = withContext(nativeDispatcher) {
+                        loadTalkerEngine(modelDir, targetModel, backendPreference)
+                    }
                     if (!loaded) {
                         lastError = "Failed to load $targetModel."
                         continue
@@ -461,7 +587,7 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
                 var lastError: String? = null
                 for (targetModel in targetModels) {
                     val loaded = withContext(nativeDispatcher) {
-                        qwenEngine.loadIclPromptEncoder(modelDir, targetModel, backendPreference)
+                        loadIclPromptEngine(modelDir, targetModel, backendPreference)
                     }
                     if (!loaded) {
                         lastError = "Failed to load $targetModel for ICL prompt extraction."
@@ -673,6 +799,150 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
         return iclPromptForVoice(name, expectedDim) != null
     }
 
+    suspend fun loadVoiceLabEmbeddings(
+        voiceIds: List<String>,
+        dimension: Int
+    ): Result<List<LoadedVoiceEmbedding>> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(dimension == 1024 || dimension == 2048) { "Unsupported embedding dimension D$dimension." }
+            val presetsById = _voices.value.associateBy { it.id }
+            voiceIds.map { voiceId ->
+                val preset = presetsById[voiceId]
+                    ?: throw IllegalArgumentException("Selected voice no longer exists.")
+                require(!preset.isSystem) { "System voices do not expose speaker embeddings." }
+                val path = preset.speakerEmbeddings[dimension]
+                    ?: throw IllegalArgumentException("${preset.name} has no D$dimension embedding.")
+                val values = loadSpeakerEmbedding(path)
+                require(values.size == dimension) {
+                    "${preset.name} has a ${values.size}-value embedding, expected D$dimension."
+                }
+                LoadedVoiceEmbedding(
+                    voiceId = preset.id,
+                    name = preset.name,
+                    dimension = dimension,
+                    values = values
+                )
+            }
+        }
+    }
+
+    fun generateVoiceLabPreview(
+        recipe: VoiceLabRecipe,
+        text: String,
+        language: String,
+        modelDir: String,
+        modelName: String?,
+        backendPreference: NativeBackendPreference
+    ) {
+        val previewText = text.trim()
+        if (previewText.isBlank()) {
+            _voiceLabPreviewState.value = VoiceLabPreviewState(error = "Preview text is required.")
+            return
+        }
+        if (modelDir.isBlank()) {
+            _voiceLabPreviewState.value = VoiceLabPreviewState(error = "Select a model directory in Setup first.")
+            return
+        }
+        if (_isCreating.value || _voiceLabPreviewState.value.isGenerating) return
+
+        invalidateVoiceLabPreview()
+        val requestId = previewRequestVersion.incrementAndGet()
+        _voiceLabPreviewState.value = VoiceLabPreviewState(isGenerating = true)
+
+        previewGenerationJob = viewModelScope.launch(Dispatchers.IO) {
+            var temporaryEmbedding: File? = null
+            try {
+                val audio = withContext(nativeDispatcher) {
+                    val resolvedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
+                    val loaded = loadTalkerEngine(modelDir, resolvedModelName, backendPreference)
+                    if (!loaded) {
+                        throw IllegalStateException("Failed to load Qwen3 models from the selected directory.")
+                    }
+
+                    val capabilities = qwenEngine.getModelCapabilities()
+                        ?: throw IllegalStateException("Could not read model capabilities.")
+                    _supportsCloning.value = capabilities.supportsCloning
+                    _currentEmbeddingDim.value = capabilities.speakerEmbeddingDim
+
+                    if (!capabilities.supportsCloning) {
+                        throw IllegalArgumentException("Voice Lab preview requires a Qwen3-TTS Base model with cloning support.")
+                    }
+                    val dimension = capabilities.speakerEmbeddingDim
+                    if (dimension != 1024 && dimension != 2048) {
+                        throw IllegalArgumentException(
+                            "The selected model reports an unsupported speaker dimension: D$dimension."
+                        )
+                    }
+
+                    val embedding = buildVoiceLabEmbedding(recipe, dimension)
+                    val previewDirectory = File(appDirectory, "preview").apply { mkdirs() }
+                    val temporaryFile = File.createTempFile("voice-lab-", ".json", previewDirectory)
+                    temporaryEmbedding = temporaryFile
+                    saveSpeakerEmbeddingJson(temporaryFile, embedding)
+
+                    qwenEngine.generate(
+                        text = previewText,
+                        referenceWav = null,
+                        speakerEmbeddingPath = temporaryFile.absolutePath,
+                        iclPromptPath = null,
+                        languageId = QwenEngine.mapLanguageToId(language),
+                        instruction = null,
+                        speaker = null
+                    )
+                }?.takeIf { it.isNotEmpty() }
+                    ?: throw IllegalStateException("Preview synthesis failed.")
+
+                if (requestId != previewRequestVersion.get()) return@launch
+                previewAudio = audio
+                _voiceLabPreviewState.value = VoiceLabPreviewState(
+                    isGenerating = false,
+                    hasAudio = true,
+                    durationSeconds = audio.size.toFloat() / PREVIEW_SAMPLE_RATE,
+                    waveform = downsampleWaveform(audio, PREVIEW_WAVEFORM_BUCKETS)
+                )
+                startVoiceLabPreviewPlayback(audio, requiredPreviewRequestId = requestId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (requestId == previewRequestVersion.get()) {
+                    _voiceLabPreviewState.value = VoiceLabPreviewState(
+                        error = e.message ?: "Voice preview failed."
+                    )
+                }
+            } finally {
+                temporaryEmbedding?.let { file -> runCatching { file.delete() } }
+                if (requestId == previewRequestVersion.get()) {
+                    _voiceLabPreviewState.value = _voiceLabPreviewState.value.copy(isGenerating = false)
+                }
+            }
+        }
+    }
+
+    fun replayVoiceLabPreview() {
+        val audio = previewAudio ?: return
+        if (audio.isNotEmpty()) startVoiceLabPreviewPlayback(audio)
+    }
+
+    fun stopVoiceLabPreview() {
+        previewPlaybackVersion.incrementAndGet()
+        previewPlaybackJob?.cancel()
+        previewPlaybackJob = null
+        runCatching { previewPlaybackLine?.stop() }
+        runCatching { previewPlaybackLine?.flush() }
+        runCatching { previewPlaybackLine?.close() }
+        previewPlaybackLine = null
+        _voiceLabPreviewState.value = _voiceLabPreviewState.value.copy(isPlaying = false)
+    }
+
+    fun invalidateVoiceLabPreview() {
+        previewRequestVersion.incrementAndGet()
+        previewGenerationJob?.cancel()
+        previewGenerationJob = null
+        stopVoiceLabPreview()
+        previewAudio = null
+        _voiceLabPreviewState.value = VoiceLabPreviewState()
+    }
+
     fun createMixedVoicePreset(
         name: String,
         sources: List<EmbeddingBlendSource>,
@@ -686,9 +956,18 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
             return
         }
 
-        val activeSources = sources.filter { it.weight > 0f }
-        if (activeSources.map { it.voiceId }.distinct().size < 2) {
+        if (sources.any { !it.weight.isFinite() || it.weight < 0f }) {
+            _error.value = "Voice weights must be finite and non-negative."
+            return
+        }
+
+        if (sources.map { it.voiceId }.filter { it.isNotBlank() }.distinct().size < 2) {
             _error.value = "Select at least two voices."
+            return
+        }
+        val activeSources = sources.filter { it.weight > 0f }
+        if (activeSources.isEmpty()) {
+            _error.value = "At least one voice needs a positive weight."
             return
         }
 
@@ -696,6 +975,8 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
         _error.value = null
 
         viewModelScope.launch(Dispatchers.IO) {
+            val createdFiles = mutableListOf<File>()
+            var addedVoiceId: String? = null
             try {
                 val presetsById = _voices.value.associateBy { it.id }
                 val selectedPresets = mutableListOf<Pair<Float, VoicePreset>>()
@@ -726,21 +1007,12 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
                 val mixedEmbeddings = sortedMapOf<Int, String>()
 
                 for (dim in commonDims) {
-                    val vectors = mutableListOf<Pair<Float, FloatArray>>()
-                    for ((weight, preset) in selectedPresets) {
-                        val path = preset.speakerEmbeddings[dim]
-                            ?: throw IllegalArgumentException("${preset.name} has no D$dim embedding.")
-                        val vector = loadSpeakerEmbedding(path)
-                        if (vector.size != dim) {
-                            throw IllegalArgumentException(
-                                "${preset.name} has a ${vector.size}-value embedding, expected D$dim."
-                            )
-                        }
-                        vectors += weight to vector
-                    }
-
-                    val mixed = mixSpeakerEmbeddings(vectors, normalize)
+                    val mixed = buildVoiceLabEmbedding(
+                        recipe = VoiceLabRecipe.WeightedMean(sources, normalize),
+                        dimension = dim
+                    )
                     val embeddingFile = File(embeddingsDir, "$voiceId-d$dim.json")
+                    createdFiles += embeddingFile
                     saveSpeakerEmbeddingJson(embeddingFile, mixed)
                     mixedEmbeddings[dim] = embeddingFile.absolutePath
                 }
@@ -753,9 +1025,14 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
                 )
 
                 _voices.value = _voices.value + preset
+                addedVoiceId = voiceId
                 saveVoices()
                 _error.value = null
             } catch (e: Exception) {
+                addedVoiceId?.let { id ->
+                    _voices.value = _voices.value.filterNot { it.id == id }
+                }
+                createdFiles.forEach { file -> runCatching { file.delete() } }
                 _error.value = "Failed to create mixed voice: ${e.message}"
             } finally {
                 _isCreating.value = false
@@ -837,7 +1114,27 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
                     encodeIclPrompts(it.iclPrompts)
                 ).joinToString("\t")
             }
-        storageFile.writeText(lines.joinToString(System.lineSeparator()))
+        val contents = lines.joinToString(System.lineSeparator())
+        val tempFile = File(storageFile.parentFile, "${storageFile.name}.tmp-${System.nanoTime()}")
+        try {
+            tempFile.writeText(contents)
+            try {
+                Files.move(
+                    tempFile.toPath(),
+                    storageFile.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(
+                    tempFile.toPath(),
+                    storageFile.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING
+                )
+            }
+        } finally {
+            if (tempFile.exists()) tempFile.delete()
+        }
     }
 
     private fun findEmbeddingTargetModels(modelDir: String, preferredModelName: String?): List<String> {
@@ -932,6 +1229,117 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
                 if (file.parentFile == managedDir && file.isFile) {
                     file.delete()
                 }
+            }
+        }
+    }
+
+    /**
+     * Creates a derived voice by transferring a reference direction onto a base voice:
+     * `base + strength * (toward - from)`.
+     *
+     * The operation is intentionally reference-based. It does not assume that any
+     * individual embedding dimension corresponds to a universal voice attribute.
+     */
+    fun createDirectionAdjustedVoicePreset(
+        name: String,
+        baseVoiceId: String,
+        fromVoiceId: String,
+        towardVoiceId: String,
+        strength: Float,
+        normalize: Boolean
+    ) {
+        if (_isCreating.value) return
+
+        val trimmedName = name.trim()
+        if (trimmedName.isBlank()) {
+            _error.value = "Preset name is required."
+            return
+        }
+        if (baseVoiceId.isBlank() || fromVoiceId.isBlank() || towardVoiceId.isBlank()) {
+            _error.value = "Select a base voice and both direction references."
+            return
+        }
+        if (fromVoiceId == towardVoiceId) {
+            _error.value = "Direction references must be different voices."
+            return
+        }
+        if (!strength.isFinite() || strength !in -1f..1f) {
+            _error.value = "Direction strength must be between -1.0 and 1.0."
+            return
+        }
+
+        _isCreating.value = true
+        _error.value = null
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val createdFiles = mutableListOf<File>()
+            var addedVoiceId: String? = null
+            try {
+                val presetsById = _voices.value.associateBy { it.id }
+                val basePreset = presetsById[baseVoiceId]
+                    ?: throw IllegalArgumentException("Base voice no longer exists.")
+                val fromPreset = presetsById[fromVoiceId]
+                    ?: throw IllegalArgumentException("From reference no longer exists.")
+                val towardPreset = presetsById[towardVoiceId]
+                    ?: throw IllegalArgumentException("Toward reference no longer exists.")
+                val selectedPresets = listOf(basePreset, fromPreset, towardPreset)
+
+                if (selectedPresets.any { it.isSystem }) {
+                    _error.value = "Only custom speaker presets can be used for a reference direction."
+                    return@launch
+                }
+
+                val commonDims = selectedPresets
+                    .map { it.speakerEmbeddings.keys }
+                    .reduce { acc, dims -> acc.intersect(dims) }
+                    .filter { it == 1024 || it == 2048 }
+                    .sorted()
+
+                if (commonDims.isEmpty()) {
+                    _error.value = "Selected voices do not share a speaker embedding dimension."
+                    return@launch
+                }
+
+                val voiceId = "voice-${System.currentTimeMillis()}"
+                val embeddingsDir = embeddingsDirectory().apply { mkdirs() }
+                val adjustedEmbeddings = sortedMapOf<Int, String>()
+
+                for (dim in commonDims) {
+                    val adjusted = buildVoiceLabEmbedding(
+                        recipe = VoiceLabRecipe.Direction(
+                            baseVoiceId = baseVoiceId,
+                            fromVoiceId = fromVoiceId,
+                            towardVoiceId = towardVoiceId,
+                            strength = strength,
+                            normalize = normalize
+                        ),
+                        dimension = dim
+                    )
+                    val embeddingFile = File(embeddingsDir, "$voiceId-d$dim.json")
+                    createdFiles += embeddingFile
+                    saveSpeakerEmbeddingJson(embeddingFile, adjusted)
+                    adjustedEmbeddings[dim] = embeddingFile.absolutePath
+                }
+
+                val preset = VoicePreset(
+                    id = voiceId,
+                    name = makeUniqueName(trimmedName),
+                    referenceWav = null,
+                    speakerEmbeddings = adjustedEmbeddings
+                )
+
+                _voices.value = _voices.value + preset
+                addedVoiceId = voiceId
+                saveVoices()
+                _error.value = null
+            } catch (e: Exception) {
+                addedVoiceId?.let { id ->
+                    _voices.value = _voices.value.filterNot { it.id == id }
+                }
+                createdFiles.forEach { file -> runCatching { file.delete() } }
+                _error.value = "Failed to create adjusted voice: ${e.message}"
+            } finally {
+                _isCreating.value = false
             }
         }
     }
@@ -1036,51 +1444,171 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
         }
     }
 
-    private fun mixSpeakerEmbeddings(
-        weightedVectors: List<Pair<Float, FloatArray>>,
-        normalize: Boolean
-    ): FloatArray {
-        val dim = weightedVectors.first().second.size
-        val sum = DoubleArray(dim)
-        var weightSum = 0.0
-        var normSum = 0.0
+    private fun buildVoiceLabEmbedding(recipe: VoiceLabRecipe, dimension: Int): FloatArray {
+        require(dimension == 1024 || dimension == 2048) { "Unsupported embedding dimension D$dimension." }
+        val presetsById = _voices.value.associateBy { it.id }
 
-        weightedVectors.forEach { (weightFloat, vector) ->
-            if (vector.size != dim) throw IllegalArgumentException("Embedding dimensions do not match.")
-            val weight = weightFloat.toDouble()
-            weightSum += weight
-            normSum += l2Norm(vector) * weight
-            for (i in 0 until dim) {
-                sum[i] += vector[i].toDouble() * weight
-            }
-        }
-
-        if (weightSum <= 0.0) throw IllegalArgumentException("Weights must be positive.")
-        val mixed = FloatArray(dim) { i -> (sum[i] / weightSum).toFloat() }
-
-        if (normalize) {
-            val targetNorm = normSum / weightSum
-            val mixedNorm = l2Norm(mixed)
-            if (targetNorm > 0.0 && mixedNorm > 0.0) {
-                val scale = targetNorm / mixedNorm
-                for (i in mixed.indices) {
-                    mixed[i] = (mixed[i] * scale).toFloat()
+        fun loadForVoice(voiceId: String): FloatArray {
+            val preset = presetsById[voiceId]
+                ?: throw IllegalArgumentException("Selected voice no longer exists.")
+            require(!preset.isSystem) { "Only custom speaker presets can be used in the Voice Lab." }
+            val path = preset.speakerEmbeddings[dimension]
+                ?: throw IllegalArgumentException("${preset.name} has no D$dimension embedding.")
+            return loadSpeakerEmbedding(path).also { vector ->
+                require(vector.size == dimension) {
+                    "${preset.name} has a ${vector.size}-value embedding, expected D$dimension."
                 }
             }
         }
 
-        if (mixed.any { !it.isFinite() }) {
-            throw IllegalArgumentException("Mixed embedding contains invalid values.")
+        return when (recipe) {
+            is VoiceLabRecipe.WeightedMean -> {
+                require(recipe.sources.map { it.voiceId }.filter { it.isNotBlank() }.distinct().size >= 2) {
+                    "Select at least two different voices."
+                }
+                require(recipe.sources.all { it.weight.isFinite() && it.weight >= 0f }) {
+                    "Voice weights must be finite and non-negative."
+                }
+                val activeSources = recipe.sources.filter { it.weight > 0f }
+                require(activeSources.isNotEmpty()) { "At least one voice needs a positive weight." }
+                EmbeddingArithmetic.weightedMean(
+                    vectors = activeSources.map { source ->
+                        EmbeddingArithmetic.WeightedVector(source.weight, loadForVoice(source.voiceId))
+                    },
+                    preserveAverageNorm = recipe.normalize
+                )
+            }
+
+            is VoiceLabRecipe.Direction -> {
+                require(recipe.fromVoiceId != recipe.towardVoiceId) {
+                    "Direction references must be different voices."
+                }
+                require(recipe.strength.isFinite() && recipe.strength in -1f..1f) {
+                    "Direction strength must be between -1.0 and 1.0."
+                }
+                EmbeddingArithmetic.shiftAlongDirection(
+                    base = loadForVoice(recipe.baseVoiceId),
+                    from = loadForVoice(recipe.fromVoiceId),
+                    toward = loadForVoice(recipe.towardVoiceId),
+                    strength = recipe.strength,
+                    preserveBaseNorm = recipe.normalize
+                )
+            }
         }
-        return mixed
     }
 
-    private fun l2Norm(vector: FloatArray): Double {
-        var sum = 0.0
-        for (value in vector) {
-            sum += value.toDouble() * value.toDouble()
+    private fun startVoiceLabPreviewPlayback(
+        samples: FloatArray,
+        requiredPreviewRequestId: Long? = null
+    ) {
+        if (samples.isEmpty()) return
+        if (requiredPreviewRequestId != null && requiredPreviewRequestId != previewRequestVersion.get()) return
+        stopVoiceLabPreview()
+        val playbackId = previewPlaybackVersion.incrementAndGet()
+
+        previewPlaybackJob = viewModelScope.launch(Dispatchers.IO) {
+            var line: SourceDataLine? = null
+            try {
+                if (requiredPreviewRequestId != null && requiredPreviewRequestId != previewRequestVersion.get()) {
+                    return@launch
+                }
+                val format = AudioFormat(PREVIEW_SAMPLE_RATE.toFloat(), 16, 1, true, false)
+                val lineInfo = DataLine.Info(SourceDataLine::class.java, format)
+                val mixer = findPreviewPlaybackMixer(format)
+                line = if (mixer != null) {
+                    mixer.getLine(lineInfo) as SourceDataLine
+                } else {
+                    AudioSystem.getLine(lineInfo) as SourceDataLine
+                }
+                previewPlaybackLine = line
+                val bufferBytes = maxOf(4_096, PREVIEW_SAMPLE_RATE * format.frameSize / 4)
+                line.open(format, bufferBytes)
+                line.start()
+                if (playbackId == previewPlaybackVersion.get()) {
+                    _voiceLabPreviewState.value = _voiceLabPreviewState.value.copy(isPlaying = true, error = null)
+                }
+
+                val pcmBuffer = ByteArray(PREVIEW_PLAYBACK_CHUNK_SAMPLES * 2)
+                var position = 0
+                while (
+                    isActive &&
+                    playbackId == previewPlaybackVersion.get() &&
+                    (requiredPreviewRequestId == null || requiredPreviewRequestId == previewRequestVersion.get()) &&
+                    position < samples.size
+                ) {
+                    val sampleCount = minOf(PREVIEW_PLAYBACK_CHUNK_SAMPLES, samples.size - position)
+                    fillPreviewPcm16(samples, position, sampleCount, pcmBuffer)
+                    line.write(pcmBuffer, 0, sampleCount * 2)
+                    position += sampleCount
+                }
+                if (isActive) line.drain()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (playbackId == previewPlaybackVersion.get()) {
+                    _voiceLabPreviewState.value = _voiceLabPreviewState.value.copy(
+                        isPlaying = false,
+                        error = "Preview was generated, but playback failed: ${e.message}"
+                    )
+                }
+            } finally {
+                runCatching { line?.stop() }
+                runCatching { line?.flush() }
+                runCatching { line?.close() }
+                if (previewPlaybackLine == line) previewPlaybackLine = null
+                if (playbackId == previewPlaybackVersion.get()) {
+                    previewPlaybackJob = null
+                    _voiceLabPreviewState.value = _voiceLabPreviewState.value.copy(isPlaying = false)
+                }
+            }
         }
-        return sqrt(sum)
+    }
+
+    private fun findPreviewPlaybackMixer(format: AudioFormat): javax.sound.sampled.Mixer? {
+        return AudioSystem.getMixerInfo()
+            .sortedByDescending { info ->
+                val name = info.name.lowercase()
+                when {
+                    name.contains("pulse") || name.contains("pipewire") || name.contains("default") -> 100
+                    name.contains("groove") -> 90
+                    name.contains("analog") || name.contains("generic") -> 50
+                    else -> 0
+                }
+            }
+            .firstNotNullOfOrNull { info ->
+                runCatching {
+                    val mixer = AudioSystem.getMixer(info)
+                    val lineInfo = DataLine.Info(SourceDataLine::class.java, format)
+                    mixer.takeIf { it.isLineSupported(lineInfo) }
+                }.getOrNull()
+            }
+    }
+
+    private fun fillPreviewPcm16(
+        samples: FloatArray,
+        start: Int,
+        sampleCount: Int,
+        destination: ByteArray
+    ) {
+        for (offset in 0 until sampleCount) {
+            val pcm = (samples[start + offset].coerceIn(-1f, 1f) * 32767f).toInt()
+            destination[offset * 2] = (pcm and 0xFF).toByte()
+            destination[offset * 2 + 1] = ((pcm ushr 8) and 0xFF).toByte()
+        }
+    }
+
+    private fun downsampleWaveform(samples: FloatArray, requestedBuckets: Int): List<Float> {
+        if (samples.isEmpty() || requestedBuckets <= 0) return emptyList()
+        val bucketCount = minOf(requestedBuckets, samples.size)
+        return List(bucketCount) { bucketIndex ->
+            val start = bucketIndex * samples.size / bucketCount
+            val end = maxOf(start + 1, (bucketIndex + 1) * samples.size / bucketCount)
+            var peak = 0f
+            for (index in start until end) {
+                peak = maxOf(peak, kotlin.math.abs(samples[index]))
+            }
+            peak.coerceIn(0f, 1f)
+        }
     }
 
     private fun saveSpeakerEmbeddingJson(file: File, embedding: FloatArray) {
@@ -1427,8 +1955,9 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
     }
 
     fun releaseEngine() {
+        invalidateVoiceLabPreview()
         viewModelScope.launch(nativeDispatcher) {
-            qwenEngine.release()
+            releaseLoadedEngine()
         }
     }
 
@@ -1437,7 +1966,8 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
         stopRecording()
         recordingJob?.cancel()
         recordingTimerJob?.cancel()
-        qwenEngine.release()
-        nativeDispatcher.close()
+        invalidateVoiceLabPreview()
+        nativeExecutor.execute { runCatching { releaseLoadedEngine() } }
+        nativeExecutor.shutdown()
     }
 }
