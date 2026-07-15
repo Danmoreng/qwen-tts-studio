@@ -1,11 +1,10 @@
 package com.qwen.tts.studio.screens
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,12 +12,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -32,7 +31,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -43,22 +41,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.qwen.tts.studio.embedding.EmbeddingPoint2D
-import com.qwen.tts.studio.embedding.MorphDifferenceBin
+import com.qwen.tts.studio.embedding.LatentBlockSummary
 import com.qwen.tts.studio.embedding.MorphEmbeddingAnalysis
 import com.qwen.tts.studio.viewmodel.VoiceLabPreviewState
 import java.util.Locale
 import kotlin.math.max
-import kotlin.math.min
+import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 @Composable
 internal fun MorphEmbeddingVisualization(
@@ -67,32 +62,39 @@ internal fun MorphEmbeddingVisualization(
     availableDimensions: List<Int>,
     selectedDimension: Int,
     onDimensionSelected: (Int) -> Unit,
+    preserveAverageNorm: Boolean,
+    onPreserveAverageNormChange: (Boolean) -> Unit,
     analysis: MorphEmbeddingAnalysis?,
     isLoading: Boolean,
     error: String?
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+        )
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Icon(Icons.Default.GraphicEq, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Embedding geometry", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "Exact local geometry of this morph — not a waveform or frequency plot.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                Text(
+                    "Latent fingerprint",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+                FilterChip(
+                    selected = preserveAverageNorm,
+                    onClick = { onPreserveAverageNormChange(!preserveAverageNorm) },
+                    label = { Text("Norm match") }
+                )
                 availableDimensions.forEach { dimension ->
                     FilterChip(
                         selected = selectedDimension == dimension,
@@ -105,7 +107,7 @@ internal fun MorphEmbeddingVisualization(
             when {
                 isLoading -> {
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp),
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -120,17 +122,11 @@ internal fun MorphEmbeddingVisualization(
                 }
 
                 analysis != null -> {
-                    EmbeddingPathPlot(
+                    LatentFingerprint(
                         analysis = analysis,
                         sourceName = sourceName,
                         targetName = targetName
                     )
-                    GeometryMetrics(analysis)
-                    DifferenceBins(
-                        bins = analysis.differenceBins,
-                        sourceName = sourceName,
-                        targetName = targetName
-                    )
                 }
             }
         }
@@ -138,244 +134,127 @@ internal fun MorphEmbeddingVisualization(
 }
 
 @Composable
-private fun EmbeddingPathPlot(
+private fun LatentFingerprint(
     analysis: MorphEmbeddingAnalysis,
     sourceName: String,
     targetName: String
 ) {
-    val sourceColor = MaterialTheme.colorScheme.primary
-    val targetColor = MaterialTheme.colorScheme.tertiary
-    val mixColor = MaterialTheme.colorScheme.secondary
-    val gridColor = MaterialTheme.colorScheme.outlineVariant
-    val rawPathColor = MaterialTheme.colorScheme.onSurfaceVariant
-    val surfaceColor = MaterialTheme.colorScheme.surface
+    val bins = analysis.fingerprintBins
+    if (bins.isEmpty()) return
 
-    Text(
-        "Vertical axis: orthogonal deviation introduced by norm matching",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
+    val vectorScale = bins.maxOf { bin ->
+        maxOf(bin.source.rms, bin.target.rms)
+    }.coerceAtLeast(1e-12)
+    val negativeColor = MaterialTheme.colorScheme.tertiary
+    val positiveColor = MaterialTheme.colorScheme.primary
+    val neutralColor = MaterialTheme.colorScheme.surface
+    val neutralMagnitudeColor = MaterialTheme.colorScheme.onSurfaceVariant
 
-    Canvas(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(230.dp)
-            .semantics {
-                contentDescription =
-                    "Local two-dimensional embedding plane with $sourceName, current mix, and $targetName. " +
-                        "Axes use embedding units and are not acoustic frequencies."
-            }
-    ) {
-        val plotPadding = 22.dp.toPx()
-        val plotWidth = (size.width - 2f * plotPadding).coerceAtLeast(1f)
-        val plotHeight = (size.height - 2f * plotPadding).coerceAtLeast(1f)
-        val allPoints = analysis.actualPathSegments.flatten() + analysis.source + analysis.target + analysis.mixed
-        val rawMinX = allPoints.minOf { it.x }
-        val rawMaxX = allPoints.maxOf { it.x }
-        val rawMinY = allPoints.minOf { it.y }
-        val rawMaxY = allPoints.maxOf { it.y }
-        val xCenter = (rawMinX + rawMaxX) / 2.0
-        val yCenter = (rawMinY + rawMaxY) / 2.0
-        val xSpan = max(rawMaxX - rawMinX, 1e-9)
-        val ySpan = max(rawMaxY - rawMinY, xSpan * 0.22)
-        val paddedXSpan = xSpan * 1.18
-        val paddedYSpan = ySpan * 1.18
-        val scale = min(plotWidth / paddedXSpan.toFloat(), plotHeight / paddedYSpan.toFloat())
-
-        fun map(point: EmbeddingPoint2D): Offset = Offset(
-            x = size.width / 2f + ((point.x - xCenter) * scale).toFloat(),
-            y = size.height / 2f - ((point.y - yCenter) * scale).toFloat()
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        FingerprintRow(
+            label = "A · $sourceName",
+            values = bins.map { it.source },
+            scale = vectorScale,
+            negativeColor = negativeColor,
+            positiveColor = positiveColor,
+            neutralColor = neutralColor,
+            neutralMagnitudeColor = neutralMagnitudeColor
         )
-
-        for (step in 0..4) {
-            val fraction = step / 4f
-            val x = plotPadding + plotWidth * fraction
-            val y = plotPadding + plotHeight * fraction
-            drawLine(gridColor, Offset(x, plotPadding), Offset(x, size.height - plotPadding), strokeWidth = 1f)
-            drawLine(gridColor, Offset(plotPadding, y), Offset(size.width - plotPadding, y), strokeWidth = 1f)
-        }
-
-        drawLine(
-            color = rawPathColor,
-            start = map(analysis.source),
-            end = map(analysis.target),
-            strokeWidth = 2.dp.toPx(),
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(8.dp.toPx(), 6.dp.toPx()))
+        FingerprintRow(
+            label = "B · $targetName",
+            values = bins.map { it.target },
+            scale = vectorScale,
+            negativeColor = negativeColor,
+            positiveColor = positiveColor,
+            neutralColor = neutralColor,
+            neutralMagnitudeColor = neutralMagnitudeColor
         )
-
-        analysis.actualPathSegments.forEach { segment ->
-            val path = Path()
-            segment.forEachIndexed { index, point ->
-                val mapped = map(point)
-                if (index == 0) path.moveTo(mapped.x, mapped.y) else path.lineTo(mapped.x, mapped.y)
-            }
-            drawPath(path, color = mixColor, style = Stroke(width = 3.dp.toPx()))
-        }
-
-        val sourceCenter = map(analysis.source)
-        val targetCenter = map(analysis.target)
-        val mixedCenter = map(analysis.mixed)
-        val targetRadius = 7.dp.toPx()
-        val mixedRadius = 9.dp.toPx()
-
-        drawCircle(sourceColor, radius = 7.dp.toPx(), center = sourceCenter)
-        drawRect(
-            color = targetColor,
-            topLeft = Offset(targetCenter.x - targetRadius, targetCenter.y - targetRadius),
-            size = androidx.compose.ui.geometry.Size(targetRadius * 2f, targetRadius * 2f)
-        )
-        val mixedMarker = Path().apply {
-            moveTo(mixedCenter.x, mixedCenter.y - mixedRadius)
-            lineTo(mixedCenter.x + mixedRadius, mixedCenter.y)
-            lineTo(mixedCenter.x, mixedCenter.y + mixedRadius)
-            lineTo(mixedCenter.x - mixedRadius, mixedCenter.y)
-            close()
-        }
-        drawPath(mixedMarker, color = mixColor)
-        drawCircle(
-            color = surfaceColor,
-            radius = 4.dp.toPx(),
-            center = mixedCenter
+        FingerprintRow(
+            label = "Output",
+            values = bins.map { it.mixed },
+            scale = vectorScale,
+            negativeColor = negativeColor,
+            positiveColor = positiveColor,
+            neutralColor = neutralColor,
+            neutralMagnitudeColor = neutralMagnitudeColor
         )
     }
+}
 
-    Text(
-        "Horizontal axis: A → B direction (embedding units)",
+@Composable
+private fun FingerprintRow(
+    label: String,
+    values: List<LatentBlockSummary>,
+    scale: Double,
+    negativeColor: Color,
+    positiveColor: Color,
+    neutralColor: Color,
+    neutralMagnitudeColor: Color
+) {
+    val positiveCount = values.count { it.polarity > 0.02 }
+    val negativeCount = values.count { it.polarity < -0.02 }
+    val neutralCount = values.size - positiveCount - negativeCount
+    val strongestIndex = values.indices.maxByOrNull { values[it].rms }
+    val strongestPercent = strongestIndex
+        ?.let { (values[it].rms / scale * 100.0).roundToInt().coerceIn(0, 100) }
+        ?: 0
+
+    Row(
         modifier = Modifier.fillMaxWidth(),
-        textAlign = TextAlign.Center,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-
-    Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        PlotLegendItem(sourceColor, PlotMarker.Circle, sourceName)
-        PlotLegendItem(mixColor, PlotMarker.Diamond, "Current mix")
-        PlotLegendItem(targetColor, PlotMarker.Square, targetName)
-        Text("Dashed: raw linear path", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-    Text(
-        "Both axes use the same scale. Norm matching can bend the solid path away from the raw A→B line.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-}
-
-private enum class PlotMarker {
-    Circle,
-    Diamond,
-    Square
-}
-
-@Composable
-private fun PlotLegendItem(color: Color, marker: PlotMarker, label: String) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Canvas(Modifier.size(10.dp)) {
-            when (marker) {
-                PlotMarker.Circle -> drawCircle(color)
-                PlotMarker.Square -> drawRect(color)
-                PlotMarker.Diamond -> {
-                    val markerPath = Path().apply {
-                        moveTo(size.width / 2f, 0f)
-                        lineTo(size.width, size.height / 2f)
-                        lineTo(size.width / 2f, size.height)
-                        lineTo(0f, size.height / 2f)
-                        close()
-                    }
-                    drawPath(markerPath, color)
-                }
-            }
-        }
-        Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-}
-
-@Composable
-private fun GeometryMetrics(analysis: MorphEmbeddingAnalysis) {
-    Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Metric("Cosine A↔B", analysis.cosineSimilarity?.let { formatNumber(it, 4) } ?: "n/a")
-        Metric("Angle", analysis.angleDegrees?.let { "${formatNumber(it, 1)}°" } ?: "n/a")
-        Metric("L2 distance", formatNumber(analysis.sourceDistance, 3))
-        Metric(
-            "Symmetric relative L2",
-            analysis.symmetricRelativeSourceDistance?.let { formatNumber(it, 3) } ?: "n/a"
-        )
-        Metric("Norm A / Mix / B", "${formatNumber(analysis.sourceNorm, 2)} / ${formatNumber(analysis.mixedNorm, 2)} / ${formatNumber(analysis.targetNorm, 2)}")
-    }
-    Text(
-        "Symmetric relative L2 = 2·‖A−B‖₂ / (‖A‖₂+‖B‖₂). These diagnostics are not perceptual scores.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-}
-
-@Composable
-private fun Metric(label: String, value: String) {
-    Surface(color = MaterialTheme.colorScheme.surface, shape = MaterialTheme.shapes.small) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
-            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(value, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-        }
-    }
-}
-
-@Composable
-private fun DifferenceBins(
-    bins: List<MorphDifferenceBin>,
-    sourceName: String,
-    targetName: String
-) {
-    if (bins.isEmpty()) return
-    val sourceTargetColor = MaterialTheme.colorScheme.onSurfaceVariant
-    val sourceMixColor = MaterialTheme.colorScheme.primary
-    val mixTargetColor = MaterialTheme.colorScheme.tertiary
-    val maximum = bins.maxOf { bin ->
-        max(bin.sourceToTargetRms, max(bin.sourceToMixRms, bin.mixToTargetRms))
-    }.coerceAtLeast(1e-12)
-
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("Latent-coordinate differences", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-        DifferenceBinRow("$sourceName ↔ $targetName", bins.map { it.sourceToTargetRms }, maximum, sourceTargetColor)
-        DifferenceBinRow("$sourceName ↔ Mix", bins.map { it.sourceToMixRms }, maximum, sourceMixColor)
-        DifferenceBinRow("Mix ↔ $targetName", bins.map { it.mixToTargetRms }, maximum, mixTargetColor)
         Text(
-            "Each bar is RMS difference within an arbitrary block of latent coordinates. The blocks are not Hz bands.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            label,
+            modifier = Modifier.width(112.dp),
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
-    }
-}
-
-@Composable
-private fun DifferenceBinRow(
-    label: String,
-    values: List<Double>,
-    maximum: Double,
-    color: Color
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Canvas(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(34.dp)
-                .semantics { contentDescription = "$label across ${values.size} latent-coordinate bins" }
+                .weight(1f)
+                .height(18.dp)
+                .semantics {
+                    contentDescription =
+                        "$label latent fingerprint: ${values.size} blocks, $positiveCount positive, " +
+                            "$negativeCount negative, $neutralCount neutral-polarity. " +
+                            "Strongest block ${strongestIndex?.plus(1) ?: 0} at $strongestPercent percent of this scale."
+                }
         ) {
-            val gap = 1.dp.toPx()
-            val barWidth = (size.width / values.size - gap).coerceAtLeast(1f)
-            values.forEachIndexed { index, value ->
-                val height = (value / maximum).toFloat().coerceIn(0f, 1f) * size.height
+            val cellWidth = size.width / values.size
+            val gap = 1.dp.toPx().coerceAtMost(cellWidth * 0.35f)
+            values.forEachIndexed { index, summary ->
+                val intensity = (summary.rms / scale).toFloat().coerceIn(0f, 1f)
+                val contrastIntensity = sqrt(intensity)
+                val tint = when {
+                    summary.polarity > 0.02 -> positiveColor
+                    summary.polarity < -0.02 -> negativeColor
+                    else -> neutralMagnitudeColor
+                }
+                val blockX = index * cellWidth
+                val blockWidth = (cellWidth - gap).coerceAtLeast(1f)
                 drawRect(
-                    color = color,
-                    topLeft = Offset(index * size.width / values.size, size.height - height),
-                    size = androidx.compose.ui.geometry.Size(barWidth, height)
+                    color = lerp(neutralColor, tint, contrastIntensity.coerceIn(0f, 1f)),
+                    topLeft = Offset(blockX, 0f),
+                    size = androidx.compose.ui.geometry.Size(
+                        width = blockWidth,
+                        height = size.height
+                    )
                 )
+                if (intensity > 0.01f) {
+                    val markerHeight = 1.25.dp.toPx().coerceAtMost(size.height / 4f)
+                    val markerY = when {
+                        summary.polarity > 0.02 -> 0f
+                        summary.polarity < -0.02 -> size.height - markerHeight
+                        else -> (size.height - markerHeight) / 2f
+                    }
+                    drawRect(
+                        color = neutralMagnitudeColor.copy(alpha = 0.72f),
+                        topLeft = Offset(blockX, markerY),
+                        size = androidx.compose.ui.geometry.Size(blockWidth, markerHeight)
+                    )
+                }
             }
         }
     }
@@ -387,115 +266,289 @@ internal fun VoiceLabPreviewPanel(
     onPreviewTextChange: (String) -> Unit,
     language: String,
     onLanguageChange: (String) -> Unit,
+    presetName: String,
+    onPresetNameChange: (String) -> Unit,
     state: VoiceLabPreviewState,
     selectedModelName: String?,
     selectedEmbeddingDimension: Int?,
     compatibilityMessage: String?,
+    canGenerate: Boolean,
+    canSave: Boolean,
+    isSaving: Boolean,
+    saveLabel: String,
+    onGenerate: () -> Unit,
+    onReplay: () -> Unit,
+    onStop: () -> Unit,
+    onCancel: () -> Unit,
+    onSave: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Text(
+                    "Preview & save",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    buildString {
+                        append(selectedModelName?.takeIf { it.isNotBlank() } ?: "No model selected")
+                        selectedEmbeddingDimension?.let { append(" · D$it") }
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                when {
+                    maxWidth >= 1100.dp -> {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            PreviewSentenceField(
+                                value = previewText,
+                                onValueChange = onPreviewTextChange,
+                                modifier = Modifier.weight(1f)
+                            )
+                            PreviewLanguageDropdown(
+                                selected = language,
+                                onSelected = onLanguageChange,
+                                modifier = Modifier.width(145.dp)
+                            )
+                            PreviewTransportButtons(
+                                state = state,
+                                canGenerate = canGenerate,
+                                onGenerate = onGenerate,
+                                onReplay = onReplay,
+                                onStop = onStop,
+                                onCancel = onCancel
+                            )
+                            PresetNameField(
+                                value = presetName,
+                                onValueChange = onPresetNameChange,
+                                modifier = Modifier.width(220.dp)
+                            )
+                            SaveVoiceButton(
+                                label = saveLabel,
+                                isSaving = isSaving,
+                                enabled = canSave,
+                                onClick = onSave
+                            )
+                        }
+                    }
+
+                    maxWidth >= 700.dp -> {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                PreviewSentenceField(
+                                    value = previewText,
+                                    onValueChange = onPreviewTextChange,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                PreviewLanguageDropdown(
+                                    selected = language,
+                                    onSelected = onLanguageChange,
+                                    modifier = Modifier.width(145.dp)
+                                )
+                                PreviewTransportButtons(
+                                    state = state,
+                                    canGenerate = canGenerate,
+                                    onGenerate = onGenerate,
+                                    onReplay = onReplay,
+                                    onStop = onStop,
+                                    onCancel = onCancel
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                PresetNameField(
+                                    value = presetName,
+                                    onValueChange = onPresetNameChange,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                SaveVoiceButton(
+                                    label = saveLabel,
+                                    isSaving = isSaving,
+                                    enabled = canSave,
+                                    onClick = onSave
+                                )
+                            }
+                        }
+                    }
+
+                    else -> {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            PreviewSentenceField(
+                                value = previewText,
+                                onValueChange = onPreviewTextChange,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            PreviewLanguageDropdown(
+                                selected = language,
+                                onSelected = onLanguageChange,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            PreviewTransportButtons(
+                                state = state,
+                                canGenerate = canGenerate,
+                                onGenerate = onGenerate,
+                                onReplay = onReplay,
+                                onStop = onStop,
+                                onCancel = onCancel
+                            )
+                            PresetNameField(
+                                value = presetName,
+                                onValueChange = onPresetNameChange,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            SaveVoiceButton(
+                                label = saveLabel,
+                                isSaving = isSaving,
+                                enabled = canSave,
+                                onClick = onSave
+                            )
+                        }
+                    }
+                }
+            }
+
+            compatibilityMessage?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+            state.error?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+            if (state.hasAudio && state.waveform.isNotEmpty()) {
+                PreviewWaveform(state.waveform, state.durationSeconds, state.isPlaying)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PreviewSentenceField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier,
+        label = { Text("Preview sentence") },
+        singleLine = true
+    )
+}
+
+@Composable
+private fun PresetNameField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier,
+        label = { Text("Preset name (optional)") },
+        singleLine = true
+    )
+}
+
+@Composable
+private fun PreviewTransportButtons(
+    state: VoiceLabPreviewState,
     canGenerate: Boolean,
     onGenerate: () -> Unit,
     onReplay: () -> Unit,
     onStop: () -> Unit,
     onCancel: () -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("Listen before saving", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                Text(
-                    "Preview creates a temporary embedding, synthesizes this sentence, then deletes the temporary file.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Button(onClick = onGenerate, enabled = canGenerate && !state.isGenerating) {
+            if (state.isGenerating) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(17.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onPrimary
                 )
+            } else {
+                Icon(Icons.Default.PlayArrow, contentDescription = null)
             }
-
-            OutlinedTextField(
-                value = previewText,
-                onValueChange = onPreviewTextChange,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Preview sentence") },
-                supportingText = { Text("${previewText.length} / 500") },
-                minLines = 2,
-                maxLines = 4
-            )
-
-            Text("Preview language", style = MaterialTheme.typography.labelMedium)
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                PreviewLanguageDropdown(
-                    selected = language,
-                    onSelected = onLanguageChange,
-                    modifier = Modifier.width(180.dp)
-                )
-                Button(
-                    onClick = onGenerate,
-                    enabled = canGenerate && !state.isGenerating
-                ) {
-                    if (state.isGenerating) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(17.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary
-                        )
-                    } else {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null)
-                    }
-                    Spacer(Modifier.width(7.dp))
-                    Text(if (state.isGenerating) "Generating…" else "Generate preview")
-                }
-                if (state.isGenerating) {
-                    OutlinedButton(onClick = onCancel) {
-                        Icon(Icons.Default.Stop, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Cancel")
-                    }
-                } else if (state.isPlaying) {
-                    OutlinedButton(onClick = onStop) {
-                        Icon(Icons.Default.Stop, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Stop")
-                    }
-                } else if (state.hasAudio) {
-                    OutlinedButton(onClick = onReplay) {
-                        Icon(Icons.Default.Replay, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Replay")
-                    }
+            Spacer(Modifier.width(6.dp))
+            Text(if (state.isGenerating) "Generating…" else "Preview")
+        }
+        when {
+            state.isGenerating -> {
+                OutlinedButton(onClick = onCancel) {
+                    Icon(Icons.Default.Stop, contentDescription = null)
+                    Spacer(Modifier.width(5.dp))
+                    Text("Cancel")
                 }
             }
-
-            Text(
-                buildString {
-                    append("Model: ")
-                    append(selectedModelName?.takeIf { it.isNotBlank() } ?: "not selected")
-                    selectedEmbeddingDimension?.let { append(" · D$it") }
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            compatibilityMessage?.let {
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            state.isPlaying -> {
+                OutlinedButton(onClick = onStop) {
+                    Icon(Icons.Default.Stop, contentDescription = null)
+                    Spacer(Modifier.width(5.dp))
+                    Text("Stop")
+                }
             }
-
-            state.error?.let {
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-            }
-
-            if (state.hasAudio && state.waveform.isNotEmpty()) {
-                PreviewWaveform(state.waveform, state.durationSeconds, state.isPlaying)
+            state.hasAudio -> {
+                OutlinedButton(onClick = onReplay) {
+                    Icon(Icons.Default.Replay, contentDescription = null)
+                    Spacer(Modifier.width(5.dp))
+                    Text("Replay")
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun SaveVoiceButton(
+    label: String,
+    isSaving: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Button(onClick = onClick, enabled = enabled && !isSaving) {
+        if (isSaving) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(17.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.onPrimary
+            )
+        } else {
+            Icon(Icons.Default.Save, contentDescription = null)
+        }
+        Spacer(Modifier.width(6.dp))
+        Text(if (isSaving) "Saving…" else label)
     }
 }
 
@@ -542,12 +595,15 @@ private fun PreviewLanguageDropdown(
 private fun PreviewWaveform(waveform: List<Float>, durationSeconds: Float, isPlaying: Boolean) {
     val color = if (isPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
     val centerLineColor = MaterialTheme.colorScheme.outlineVariant
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(58.dp)
-                .semantics { contentDescription = "Amplitude envelope of the generated ${formatNumber(durationSeconds.toDouble(), 1)} second preview" }
+                .height(44.dp)
+                .semantics {
+                    contentDescription =
+                        "Amplitude envelope of the generated ${formatNumber(durationSeconds.toDouble(), 1)} second preview"
+                }
         ) {
             val centerY = size.height / 2f
             drawLine(centerLineColor, Offset(0f, centerY), Offset(size.width, centerY))
@@ -555,7 +611,12 @@ private fun PreviewWaveform(waveform: List<Float>, durationSeconds: Float, isPla
             waveform.forEachIndexed { index, peak ->
                 val halfHeight = peak.coerceIn(0f, 1f) * size.height * 0.46f
                 val x = (index + 0.5f) * step
-                drawLine(color, Offset(x, centerY - halfHeight), Offset(x, centerY + halfHeight), strokeWidth = max(1f, step * 0.55f))
+                drawLine(
+                    color,
+                    Offset(x, centerY - halfHeight),
+                    Offset(x, centerY + halfHeight),
+                    strokeWidth = max(1f, step * 0.55f)
+                )
             }
         }
         Text(

@@ -104,4 +104,43 @@ class EmbeddingVisualizationTest {
         assertEquals(4.0, analysis.differenceBins[1].sourceToTargetRms, absoluteTolerance = 1e-6)
         assertEquals(6.0, analysis.differenceBins[2].sourceToTargetRms, absoluteTolerance = 1e-6)
     }
+
+    @Test
+    fun fingerprintBinsSummarizeSourceOutputAndTarget() {
+        val analysis = EmbeddingVisualization.analyzeMorph(
+            source = floatArrayOf(-2f, 0f, 2f, 4f),
+            target = floatArrayOf(2f, 2f, -2f, 0f),
+            amount = 0.5f,
+            preserveAverageNorm = false,
+            differenceBinCount = 2
+        )
+
+        val first = analysis.fingerprintBins[0]
+        assertEquals(-1.0, first.source.mean, absoluteTolerance = 1e-6)
+        assertEquals(0.5, first.mixed.mean, absoluteTolerance = 1e-6)
+        assertEquals(2.0, first.target.mean, absoluteTolerance = 1e-6)
+
+        val second = analysis.fingerprintBins[1]
+        assertEquals(3.0, second.source.mean, absoluteTolerance = 1e-6)
+        assertEquals(1.0, second.mixed.mean, absoluteTolerance = 1e-6)
+        assertEquals(-1.0, second.target.mean, absoluteTolerance = 1e-6)
+    }
+
+    @Test
+    fun fingerprintPolarityStaysFiniteForZeroAndMixedSignBlocks() {
+        val analysis = EmbeddingVisualization.analyzeMorph(
+            source = floatArrayOf(0f, 0f, -1f, 1f),
+            target = floatArrayOf(0f, 0f, 1f, -1f),
+            amount = 0.5f,
+            preserveAverageNorm = false,
+            differenceBinCount = 2
+        )
+
+        assertEquals(0.0, analysis.fingerprintBins[0].source.polarity, absoluteTolerance = 1e-6)
+        assertEquals(0.0, analysis.fingerprintBins[0].mixed.polarity, absoluteTolerance = 1e-6)
+        assertEquals(0.0, analysis.fingerprintBins[1].source.polarity, absoluteTolerance = 1e-6)
+        assertEquals(0.0, analysis.fingerprintBins[1].mixed.polarity, absoluteTolerance = 1e-6)
+        assertTrue(analysis.fingerprintBins.flatMap { listOf(it.source, it.mixed, it.target) }
+            .all { it.mean.isFinite() && it.rms.isFinite() && it.polarity.isFinite() })
+    }
 }

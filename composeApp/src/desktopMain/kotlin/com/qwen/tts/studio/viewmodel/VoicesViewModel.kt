@@ -77,14 +77,6 @@ sealed interface VoiceLabRecipe {
         val sources: List<EmbeddingBlendSource>,
         override val normalize: Boolean
     ) : VoiceLabRecipe
-
-    data class Direction(
-        val baseVoiceId: String,
-        val fromVoiceId: String,
-        val towardVoiceId: String,
-        val strength: Float,
-        override val normalize: Boolean
-    ) : VoiceLabRecipe
 }
 
 data class LoadedVoiceEmbedding(
@@ -1233,117 +1225,6 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
         }
     }
 
-    /**
-     * Creates a derived voice by transferring a reference direction onto a base voice:
-     * `base + strength * (toward - from)`.
-     *
-     * The operation is intentionally reference-based. It does not assume that any
-     * individual embedding dimension corresponds to a universal voice attribute.
-     */
-    fun createDirectionAdjustedVoicePreset(
-        name: String,
-        baseVoiceId: String,
-        fromVoiceId: String,
-        towardVoiceId: String,
-        strength: Float,
-        normalize: Boolean
-    ) {
-        if (_isCreating.value) return
-
-        val trimmedName = name.trim()
-        if (trimmedName.isBlank()) {
-            _error.value = "Preset name is required."
-            return
-        }
-        if (baseVoiceId.isBlank() || fromVoiceId.isBlank() || towardVoiceId.isBlank()) {
-            _error.value = "Select a base voice and both direction references."
-            return
-        }
-        if (fromVoiceId == towardVoiceId) {
-            _error.value = "Direction references must be different voices."
-            return
-        }
-        if (!strength.isFinite() || strength !in -1f..1f) {
-            _error.value = "Direction strength must be between -1.0 and 1.0."
-            return
-        }
-
-        _isCreating.value = true
-        _error.value = null
-
-        viewModelScope.launch(Dispatchers.IO) {
-            val createdFiles = mutableListOf<File>()
-            var addedVoiceId: String? = null
-            try {
-                val presetsById = _voices.value.associateBy { it.id }
-                val basePreset = presetsById[baseVoiceId]
-                    ?: throw IllegalArgumentException("Base voice no longer exists.")
-                val fromPreset = presetsById[fromVoiceId]
-                    ?: throw IllegalArgumentException("From reference no longer exists.")
-                val towardPreset = presetsById[towardVoiceId]
-                    ?: throw IllegalArgumentException("Toward reference no longer exists.")
-                val selectedPresets = listOf(basePreset, fromPreset, towardPreset)
-
-                if (selectedPresets.any { it.isSystem }) {
-                    _error.value = "Only custom speaker presets can be used for a reference direction."
-                    return@launch
-                }
-
-                val commonDims = selectedPresets
-                    .map { it.speakerEmbeddings.keys }
-                    .reduce { acc, dims -> acc.intersect(dims) }
-                    .filter { it == 1024 || it == 2048 }
-                    .sorted()
-
-                if (commonDims.isEmpty()) {
-                    _error.value = "Selected voices do not share a speaker embedding dimension."
-                    return@launch
-                }
-
-                val voiceId = "voice-${System.currentTimeMillis()}"
-                val embeddingsDir = embeddingsDirectory().apply { mkdirs() }
-                val adjustedEmbeddings = sortedMapOf<Int, String>()
-
-                for (dim in commonDims) {
-                    val adjusted = buildVoiceLabEmbedding(
-                        recipe = VoiceLabRecipe.Direction(
-                            baseVoiceId = baseVoiceId,
-                            fromVoiceId = fromVoiceId,
-                            towardVoiceId = towardVoiceId,
-                            strength = strength,
-                            normalize = normalize
-                        ),
-                        dimension = dim
-                    )
-                    val embeddingFile = File(embeddingsDir, "$voiceId-d$dim.json")
-                    createdFiles += embeddingFile
-                    saveSpeakerEmbeddingJson(embeddingFile, adjusted)
-                    adjustedEmbeddings[dim] = embeddingFile.absolutePath
-                }
-
-                val preset = VoicePreset(
-                    id = voiceId,
-                    name = makeUniqueName(trimmedName),
-                    referenceWav = null,
-                    speakerEmbeddings = adjustedEmbeddings
-                )
-
-                _voices.value = _voices.value + preset
-                addedVoiceId = voiceId
-                saveVoices()
-                _error.value = null
-            } catch (e: Exception) {
-                addedVoiceId?.let { id ->
-                    _voices.value = _voices.value.filterNot { it.id == id }
-                }
-                createdFiles.forEach { file -> runCatching { file.delete() } }
-                _error.value = "Failed to create adjusted voice: ${e.message}"
-            } finally {
-                _isCreating.value = false
-            }
-        }
-    }
-
     private fun encodeSpeakerEmbeddings(embeddings: Map<Int, String>): String {
         return encodePathMap(embeddings)
     }
@@ -1479,21 +1360,6 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
                 )
             }
 
-            is VoiceLabRecipe.Direction -> {
-                require(recipe.fromVoiceId != recipe.towardVoiceId) {
-                    "Direction references must be different voices."
-                }
-                require(recipe.strength.isFinite() && recipe.strength in -1f..1f) {
-                    "Direction strength must be between -1.0 and 1.0."
-                }
-                EmbeddingArithmetic.shiftAlongDirection(
-                    base = loadForVoice(recipe.baseVoiceId),
-                    from = loadForVoice(recipe.fromVoiceId),
-                    toward = loadForVoice(recipe.towardVoiceId),
-                    strength = recipe.strength,
-                    preserveBaseNorm = recipe.normalize
-                )
-            }
         }
     }
 

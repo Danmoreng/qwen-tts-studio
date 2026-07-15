@@ -16,11 +16,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.WarningAmber
@@ -30,12 +27,10 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -59,13 +54,11 @@ import com.qwen.tts.studio.viewmodel.SettingsViewModel
 import com.qwen.tts.studio.viewmodel.VoiceLabRecipe
 import com.qwen.tts.studio.viewmodel.VoicePreset
 import com.qwen.tts.studio.viewmodel.VoicesViewModel
-import java.util.Locale
 import kotlin.math.roundToInt
 
 internal enum class VoiceLabMode {
     Morph,
-    Average,
-    Direction
+    Average
 }
 
 internal class VoiceLabSessionState {
@@ -75,10 +68,6 @@ internal class VoiceLabSessionState {
     internal val mixRightIdState = mutableStateOf("")
     internal val mixAmountState = mutableStateOf(0.5f)
     internal val averageSelectionState = mutableStateOf(setOf<String>())
-    internal val directionBaseIdState = mutableStateOf("")
-    internal val directionFromIdState = mutableStateOf("")
-    internal val directionTowardIdState = mutableStateOf("")
-    internal val directionStrengthState = mutableStateOf(0.25f)
     internal val normalizeState = mutableStateOf(true)
     internal val visualizationDimensionState = mutableStateOf(0)
     internal val previewTextState = mutableStateOf("This sentence previews the voice currently being mixed.")
@@ -113,10 +102,6 @@ internal fun VoiceLabScreen(
     var mixRightId by sessionState.mixRightIdState
     var mixAmount by sessionState.mixAmountState
     var averageSelection by sessionState.averageSelectionState
-    var directionBaseId by sessionState.directionBaseIdState
-    var directionFromId by sessionState.directionFromIdState
-    var directionTowardId by sessionState.directionTowardIdState
-    var directionStrength by sessionState.directionStrengthState
     var normalize by sessionState.normalizeState
     var visualizationDimension by sessionState.visualizationDimensionState
     var previewText by sessionState.previewTextState
@@ -133,18 +118,11 @@ internal fun VoiceLabScreen(
             mixRightId = ids.firstOrNull { it != mixLeftId }.orEmpty()
         }
         averageSelection = averageSelection.filterTo(mutableSetOf()) { it in ids }
-
-        if (directionBaseId !in ids) directionBaseId = ids.firstOrNull().orEmpty()
-        if (directionFromId !in ids) directionFromId = ids.firstOrNull().orEmpty()
-        if (directionTowardId !in ids || directionTowardId == directionFromId) {
-            directionTowardId = ids.firstOrNull { it != directionFromId }.orEmpty()
-        }
     }
 
     val selectedIds = when (mode) {
         VoiceLabMode.Morph -> listOf(mixLeftId, mixRightId)
         VoiceLabMode.Average -> averageSelection.toList()
-        VoiceLabMode.Direction -> listOf(directionBaseId, directionFromId, directionTowardId)
     }.filter { it.isNotBlank() }
 
     val outputDims = commonEmbeddingDims(customVoices, selectedIds)
@@ -152,9 +130,6 @@ internal fun VoiceLabScreen(
         VoiceLabMode.Morph ->
             mixLeftId.isNotBlank() && mixRightId.isNotBlank() && mixLeftId != mixRightId
         VoiceLabMode.Average -> averageSelection.size >= 2
-        VoiceLabMode.Direction ->
-            directionBaseId.isNotBlank() && directionFromId.isNotBlank() &&
-                directionTowardId.isNotBlank() && directionFromId != directionTowardId
     }
     val canCreate = outputDims.isNotEmpty() && selectionReady
     val requiredPreviewDimension = when {
@@ -187,13 +162,6 @@ internal fun VoiceLabScreen(
         )
         VoiceLabMode.Average -> VoiceLabRecipe.WeightedMean(
             sources = averageSelection.sorted().map { EmbeddingBlendSource(it, 1f) },
-            normalize = normalize
-        )
-        VoiceLabMode.Direction -> VoiceLabRecipe.Direction(
-            baseVoiceId = directionBaseId,
-            fromVoiceId = directionFromId,
-            towardVoiceId = directionTowardId,
-            strength = directionStrength,
             normalize = normalize
         )
     }
@@ -256,7 +224,8 @@ internal fun VoiceLabScreen(
                 source = morphEmbeddings[0].values,
                 target = morphEmbeddings[1].values,
                 amount = mixAmount,
-                preserveAverageNorm = normalize
+                preserveAverageNorm = normalize,
+                pathSampleCount = 2
             )
         }
     }
@@ -279,11 +248,43 @@ internal fun VoiceLabScreen(
         }
     }
 
+    val saveLabel = when (mode) {
+        VoiceLabMode.Morph -> "Save voice"
+        VoiceLabMode.Average -> "Save average"
+    }
+    val savePreset: () -> Unit = {
+        val nameToUse = presetName.ifBlank {
+            when (mode) {
+                VoiceLabMode.Morph -> "Morphed Voice"
+                VoiceLabMode.Average -> "Averaged Voice"
+            }
+        }
+
+        when (mode) {
+            VoiceLabMode.Morph -> viewModel.createMixedVoicePreset(
+                name = nameToUse,
+                sources = listOf(
+                    EmbeddingBlendSource(mixLeftId, 1f - mixAmount),
+                    EmbeddingBlendSource(mixRightId, mixAmount)
+                ),
+                normalize = normalize
+            )
+            VoiceLabMode.Average -> viewModel.createMixedVoicePreset(
+                name = nameToUse,
+                sources = averageSelection
+                    .sorted()
+                    .map { EmbeddingBlendSource(it, 1f) },
+                normalize = normalize
+            )
+        }
+        clearPresetNameOnSuccess = true
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp)
-            .verticalScroll(rememberScrollState()),
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         error?.let { ErrorBanner(it) }
@@ -317,9 +318,6 @@ internal fun VoiceLabScreen(
                     DimensionBadge(outputDims, selectionReady)
                 }
 
-                CompatibilityNotice()
-                DataRightsNotice()
-
                 if (customVoices.size < 2) {
                     EmptyLabState(customVoices.size)
                 }
@@ -331,20 +329,9 @@ internal fun VoiceLabScreen(
                 ) {
                     ModeButton("Morph", mode == VoiceLabMode.Morph) { mode = VoiceLabMode.Morph }
                     ModeButton("Average", mode == VoiceLabMode.Average) { mode = VoiceLabMode.Average }
-                    ModeButton("Reference direction", mode == VoiceLabMode.Direction) {
-                        mode = VoiceLabMode.Direction
-                    }
                 }
 
-                MethodNotice(mode)
-
-                OutlinedTextField(
-                    value = presetName,
-                    onValueChange = { presetName = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("New preset name") },
-                    singleLine = true
-                )
+                if (mode != VoiceLabMode.Morph) MethodNotice(mode)
 
                 when (mode) {
                     VoiceLabMode.Morph -> {
@@ -421,89 +408,6 @@ internal fun VoiceLabScreen(
                         }
                     }
 
-                    VoiceLabMode.Direction -> {
-                        LabeledVoiceDropdown(
-                            label = "Base voice",
-                            helper = "The voice that will be adjusted",
-                            voices = customVoices,
-                            selectedId = directionBaseId,
-                            onSelected = { directionBaseId = it },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-                        Text(
-                            "Reference pair",
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            "For the cleanest direction, use the same speaker, microphone and phrase in two different styles.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            LabeledVoiceDropdown(
-                                label = "From",
-                                helper = "Example: calm",
-                                voices = customVoices,
-                                selectedId = directionFromId,
-                                onSelected = { selected ->
-                                    directionFromId = selected
-                                    if (directionTowardId == selected) {
-                                        directionTowardId = customVoices
-                                            .firstOrNull { it.id != selected }
-                                            ?.id
-                                            .orEmpty()
-                                    }
-                                },
-                                modifier = Modifier.weight(1f)
-                            )
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowForward,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            LabeledVoiceDropdown(
-                                label = "Toward",
-                                helper = "Example: energetic",
-                                voices = customVoices,
-                                selectedId = directionTowardId,
-                                onSelected = { selected ->
-                                    directionTowardId = selected
-                                    if (directionFromId == selected) {
-                                        directionFromId = customVoices
-                                            .firstOrNull { it.id != selected }
-                                            ?.id
-                                            .orEmpty()
-                                    }
-                                },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-
-                        DirectionStrengthControl(
-                            strength = directionStrength,
-                            onStrengthChange = { directionStrength = it }
-                        )
-
-                        DirectionEquationCard(
-                            baseName = voiceName(customVoices, directionBaseId),
-                            fromName = voiceName(customVoices, directionFromId),
-                            towardName = voiceName(customVoices, directionTowardId),
-                            strength = directionStrength,
-                            preserveBaseNorm = normalize
-                        )
-
-                        WarningBanner(
-                            "The percentage scales this pair's raw vector distance; it is not an out-of-distribution " +
-                                "or quality score. Even a small shift can produce artifacts, so compare by ear."
-                        )
-                    }
                 }
 
                 if (selectedIds.distinct().size >= 2 && outputDims.isEmpty()) {
@@ -513,23 +417,24 @@ internal fun VoiceLabScreen(
                     )
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Checkbox(checked = normalize, onCheckedChange = { normalize = it })
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            if (mode == VoiceLabMode.Direction) "Match the base embedding norm"
-                            else "Match the weighted mean of source norms",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Text(
-                            "Optional norm-stability heuristic; it does not guarantee a natural result.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                if (mode != VoiceLabMode.Morph) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Checkbox(checked = normalize, onCheckedChange = { normalize = it })
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Match the weighted mean of source norms",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                "Optional norm-stability heuristic; it does not guarantee a natural result.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
 
@@ -540,6 +445,8 @@ internal fun VoiceLabScreen(
                         availableDimensions = visualizationDimensions,
                         selectedDimension = visualizationDimension,
                         onDimensionSelected = { visualizationDimension = it },
+                        preserveAverageNorm = normalize,
+                        onPreserveAverageNormChange = { normalize = it },
                         analysis = morphAnalysis,
                         isLoading = isMorphVisualizationLoading,
                         error = displayedMorphError
@@ -551,12 +458,17 @@ internal fun VoiceLabScreen(
                     onPreviewTextChange = { previewText = it.take(500) },
                     language = previewLanguage,
                     onLanguageChange = { previewLanguage = it },
+                    presetName = presetName,
+                    onPresetNameChange = { presetName = it },
                     state = previewState,
                     selectedModelName = modelName,
                     selectedEmbeddingDimension = requiredPreviewDimension.takeIf { it > 0 },
                     compatibilityMessage = previewCompatibilityMessage,
                     canGenerate = canCreate && previewCompatibilityMessage == null &&
                         previewText.isNotBlank() && modelDir.isNotBlank() && !isCreating,
+                    canSave = canCreate && !isCreating && !previewState.isGenerating,
+                    isSaving = isCreating,
+                    saveLabel = saveLabel,
                     onGenerate = {
                         viewModel.generateVoiceLabPreview(
                             recipe = currentRecipe,
@@ -569,64 +481,9 @@ internal fun VoiceLabScreen(
                     },
                     onReplay = viewModel::replayVoiceLabPreview,
                     onStop = viewModel::stopVoiceLabPreview,
-                    onCancel = viewModel::invalidateVoiceLabPreview
+                    onCancel = viewModel::invalidateVoiceLabPreview,
+                    onSave = savePreset
                 )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    Button(
-                        onClick = {
-                            val nameToUse = presetName.ifBlank {
-                                when (mode) {
-                                    VoiceLabMode.Morph -> "Morphed Voice"
-                                    VoiceLabMode.Average -> "Averaged Voice"
-                                    VoiceLabMode.Direction -> "Adjusted Voice"
-                                }
-                            }
-
-                            when (mode) {
-                                VoiceLabMode.Morph -> viewModel.createMixedVoicePreset(
-                                    name = nameToUse,
-                                    sources = listOf(
-                                        EmbeddingBlendSource(mixLeftId, 1f - mixAmount),
-                                        EmbeddingBlendSource(mixRightId, mixAmount)
-                                    ),
-                                    normalize = normalize
-                                )
-                                VoiceLabMode.Average -> viewModel.createMixedVoicePreset(
-                                    name = nameToUse,
-                                    sources = averageSelection
-                                        .sorted()
-                                        .map { EmbeddingBlendSource(it, 1f) },
-                                    normalize = normalize
-                                )
-                                VoiceLabMode.Direction -> viewModel.createDirectionAdjustedVoicePreset(
-                                    name = nameToUse,
-                                    baseVoiceId = directionBaseId,
-                                    fromVoiceId = directionFromId,
-                                    towardVoiceId = directionTowardId,
-                                    strength = directionStrength,
-                                    normalize = normalize
-                                )
-                            }
-                            clearPresetNameOnSuccess = true
-                        },
-                        enabled = canCreate && !isCreating && !previewState.isGenerating
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            when {
-                                isCreating -> "Creating..."
-                                mode == VoiceLabMode.Morph -> "Create morph"
-                                mode == VoiceLabMode.Average -> "Create average"
-                                else -> "Create adjustment"
-                            }
-                        )
-                    }
-                }
             }
         }
     }
@@ -658,11 +515,6 @@ private fun MethodNotice(mode: VoiceLabMode) {
             Icons.Default.Tune,
             "Equal-weight mean",
             "Average multiple embeddings, with optional norm rescaling. Treat same-speaker averaging as experimental."
-        )
-        VoiceLabMode.Direction -> Triple(
-            Icons.Default.Science,
-            "Experimental reference direction",
-            "Transfers the difference between two examples. It does not create a universal gender, pitch or emotion axis."
         )
     }
 
@@ -760,155 +612,6 @@ private fun VoiceDropdown(
                     }
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun DirectionStrengthControl(
-    strength: Float,
-    onStrengthChange: (Float) -> Unit
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    "Direction strength",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    "0% leaves the base unchanged; +100% applies the full raw reference delta before optional norm rescaling.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Surface(
-                color = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                shape = MaterialTheme.shapes.small
-            ) {
-                Text(
-                    formatPercent(strength),
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
-        Slider(
-            value = strength,
-            onValueChange = onStrengthChange,
-            valueRange = -1f..1f,
-            steps = 39
-        )
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("− reference direction", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("Base unchanged", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("+ reference direction", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            listOf(-0.5f, -0.25f, 0f, 0.25f, 0.5f).forEach { value ->
-                OutlinedButton(
-                    onClick = { onStrengthChange(value) },
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                ) {
-                    Text(formatPercent(value))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DirectionEquationCard(
-    baseName: String,
-    fromName: String,
-    towardName: String,
-    strength: Float,
-    preserveBaseNorm: Boolean
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-        shape = MaterialTheme.shapes.medium,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-    ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Text(
-                "VECTOR RECIPE",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                "Raw: $baseName  +  ${formatCoefficient(strength)} × ($towardName − $fromName)",
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (preserveBaseNorm) {
-                Text(
-                    "Result: rescale the raw vector to the L2 norm of $baseName",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun CompatibilityNotice() {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.Top
-        ) {
-            Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Text(
-                "Compatibility check: the app verifies D1024/D2048 only. It does not yet store or verify the " +
-                    "source checkpoint. Combine embeddings extracted with the same Qwen3-TTS Base checkpoint.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@Composable
-private fun DataRightsNotice() {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.Top
-        ) {
-            Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Text(
-                "Speaker embeddings can encode identity-like biometric information. Use recordings with consent. " +
-                    "A derived voice is not automatically anonymous or free of source-voice rights.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         }
     }
 }
@@ -1039,13 +742,3 @@ private fun commonEmbeddingDims(voices: List<VoicePreset>, ids: List<String>): L
 
 private fun voiceName(voices: List<VoicePreset>, id: String): String =
     voices.firstOrNull { it.id == id }?.name ?: "Select voice"
-
-private fun formatPercent(value: Float): String {
-    val percent = (value * 100).roundToInt()
-    return when {
-        percent > 0 -> "+$percent%"
-        else -> "$percent%"
-    }
-}
-
-private fun formatCoefficient(value: Float): String = String.format(Locale.ROOT, "%+.2f", value)

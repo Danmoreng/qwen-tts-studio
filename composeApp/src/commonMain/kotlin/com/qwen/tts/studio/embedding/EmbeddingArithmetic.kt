@@ -55,40 +55,6 @@ object EmbeddingArithmetic {
         return result
     }
 
-    /**
-     * Transfers the direction represented by [toward] - [from] onto [base].
-     *
-     * This does not discover a semantic attribute. The caller is responsible for
-     * choosing a meaningful, preferably paired reference recording for each end
-     * of the direction.
-     */
-    fun shiftAlongDirection(
-        base: FloatArray,
-        from: FloatArray,
-        toward: FloatArray,
-        strength: Float,
-        preserveBaseNorm: Boolean
-    ): FloatArray {
-        require(base.isNotEmpty()) { "Embedding must not be empty." }
-        require(from.size == base.size && toward.size == base.size) { "Embedding dimensions do not match." }
-        require(strength.isFinite()) { "Direction strength must be finite." }
-        requireFinite(base)
-        requireFinite(from)
-        requireFinite(toward)
-
-        val result = FloatArray(base.size) { index ->
-            (base[index].toDouble() + strength.toDouble() *
-                (toward[index].toDouble() - from[index].toDouble())).toFloat()
-        }
-        requireFinite(result)
-
-        if (preserveBaseNorm) {
-            rescaleToNorm(result, l2Norm(base))
-        }
-
-        return result
-    }
-
     fun l2Norm(vector: FloatArray): Double {
         var squaredSum = 0.0
         for (value in vector) {

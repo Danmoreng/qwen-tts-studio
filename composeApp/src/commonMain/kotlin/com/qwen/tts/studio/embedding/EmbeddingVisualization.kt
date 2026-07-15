@@ -17,6 +17,20 @@ data class MorphDifferenceBin(
     val mixToTargetRms: Double
 )
 
+data class LatentBlockSummary(
+    val mean: Double,
+    val rms: Double
+) {
+    val polarity: Double
+        get() = if (rms > 1e-12) (mean / rms).coerceIn(-1.0, 1.0) else 0.0
+}
+
+data class MorphFingerprintBin(
+    val source: LatentBlockSummary,
+    val mixed: LatentBlockSummary,
+    val target: LatentBlockSummary
+)
+
 data class MorphEmbeddingAnalysis(
     val dimension: Int,
     val source: EmbeddingPoint2D,
@@ -32,7 +46,8 @@ data class MorphEmbeddingAnalysis(
     val targetNorm: Double,
     val chordPosition: Double?,
     val relativeOrthogonalDeviation: Double?,
-    val differenceBins: List<MorphDifferenceBin>
+    val differenceBins: List<MorphDifferenceBin>,
+    val fingerprintBins: List<MorphFingerprintBin>
 )
 
 /**
@@ -48,7 +63,7 @@ object EmbeddingVisualization {
         amount: Float,
         preserveAverageNorm: Boolean,
         pathSampleCount: Int = 33,
-        differenceBinCount: Int = 32
+        differenceBinCount: Int = 48
     ): MorphEmbeddingAnalysis {
         require(source.isNotEmpty()) { "Embedding must not be empty." }
         require(source.size == target.size) { "Embedding dimensions do not match." }
@@ -148,7 +163,8 @@ object EmbeddingVisualization {
             targetNorm = targetNorm,
             chordPosition = chordPosition,
             relativeOrthogonalDeviation = relativeDeviation,
-            differenceBins = differenceBins(source, mixedVector, target, differenceBinCount)
+            differenceBins = differenceBins(source, mixedVector, target, differenceBinCount),
+            fingerprintBins = fingerprintBins(source, mixedVector, target, differenceBinCount)
         )
     }
 
@@ -197,6 +213,40 @@ object EmbeddingVisualization {
                 sourceToTargetRms = sqrt(sourceToTargetSquared / count),
                 sourceToMixRms = sqrt(sourceToMixSquared / count),
                 mixToTargetRms = sqrt(mixToTargetSquared / count)
+            )
+        }
+    }
+
+    private fun fingerprintBins(
+        source: FloatArray,
+        mixed: FloatArray,
+        target: FloatArray,
+        requestedBinCount: Int
+    ): List<MorphFingerprintBin> {
+        val binCount = min(requestedBinCount, source.size)
+        return List(binCount) { binIndex ->
+            val start = binIndex * source.size / binCount
+            val end = max(start + 1, (binIndex + 1) * source.size / binCount)
+
+            fun summarize(valueAt: (Int) -> Double): LatentBlockSummary {
+                var sum = 0.0
+                var squaredSum = 0.0
+                for (index in start until end) {
+                    val value = valueAt(index)
+                    sum += value
+                    squaredSum += value * value
+                }
+                val count = (end - start).toDouble()
+                return LatentBlockSummary(
+                    mean = sum / count,
+                    rms = sqrt(squaredSum / count)
+                )
+            }
+
+            MorphFingerprintBin(
+                source = summarize { source[it].toDouble() },
+                mixed = summarize { mixed[it].toDouble() },
+                target = summarize { target[it].toDouble() }
             )
         }
     }
