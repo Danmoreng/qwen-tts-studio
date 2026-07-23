@@ -199,7 +199,7 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
         modelDir: String,
         modelName: String?,
         backendPreference: NativeBackendPreference
-    ): Boolean = loadEngineSession(
+    ): QwenEngine.NativeOperationResult = loadEngineSession(
         modelDir = modelDir,
         modelName = modelName,
         backendPreference = backendPreference,
@@ -210,7 +210,7 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
         modelDir: String,
         modelName: String?,
         backendPreference: NativeBackendPreference
-    ): Boolean = loadEngineSession(
+    ): QwenEngine.NativeOperationResult = loadEngineSession(
         modelDir = modelDir,
         modelName = modelName,
         backendPreference = backendPreference,
@@ -222,7 +222,7 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
         modelName: String?,
         backendPreference: NativeBackendPreference,
         kind: VoiceEngineSessionKind
-    ): Boolean {
+    ): QwenEngine.NativeOperationResult {
         val normalizedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
         val requestedSession = VoiceEngineSessionKey(
             modelDirectory = File(modelDir).absolutePath,
@@ -230,23 +230,27 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
             backendPreference = backendPreference,
             kind = kind
         )
-        if (loadedEngineSession == requestedSession) return true
+        if (loadedEngineSession == requestedSession) return QwenEngine.NativeOperationResult(true)
 
         loadedEngineSession = null
-        val loaded = when (kind) {
+        val result = when (kind) {
             VoiceEngineSessionKind.Talker ->
-                qwenEngine.load(modelDir, normalizedModelName, backendPreference)
+                qwenEngine.loadDetailed(modelDir, normalizedModelName, backendPreference)
             VoiceEngineSessionKind.IclPromptEncoder ->
-                qwenEngine.loadIclPromptEncoder(modelDir, normalizedModelName, backendPreference)
+                qwenEngine.loadIclPromptEncoderDetailed(modelDir, normalizedModelName, backendPreference)
         }
-        if (loaded) loadedEngineSession = requestedSession
-        return loaded
+        if (result.success) loadedEngineSession = requestedSession
+        return result
     }
 
     private fun releaseLoadedEngine() {
         loadedEngineSession = null
         qwenEngine.release()
     }
+
+    private fun loadFailureMessage(context: String, detail: String?): String =
+        detail?.trim()?.takeIf { it.isNotEmpty() }?.let { "$context: $it" }
+            ?: "$context."
 
     /**
      * Refreshes model capabilities to update cloning support and embedding dimensions.
@@ -262,10 +266,13 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
         if (modelDir.isBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
             val resolvedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
-            val loaded = withContext(nativeDispatcher) {
+            val loadResult = withContext(nativeDispatcher) {
                 loadTalkerEngine(modelDir, resolvedModelName, backendPreference)
             }
-            if (!loaded) return@launch
+            if (!loadResult.success) {
+                _error.value = loadFailureMessage("Failed to load Qwen3 models", loadResult.errorMsg)
+                return@launch
+            }
             val caps = withContext(nativeDispatcher) { qwenEngine.getModelCapabilities() }
             _supportsCloning.value = caps?.supportsCloning ?: true
             _currentEmbeddingDim.value = caps?.speakerEmbeddingDim ?: 0
@@ -337,11 +344,14 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
                         continue
                     }
 
-                    val loaded = withContext(nativeDispatcher) {
+                    val loadResult = withContext(nativeDispatcher) {
                         loadTalkerEngine(modelDir, targetModel, backendPreference)
                     }
-                    if (!loaded) {
-                        extractionErrors += "Failed to load $targetModel for speaker embedding extraction."
+                    if (!loadResult.success) {
+                        extractionErrors += loadFailureMessage(
+                            "Failed to load $targetModel for speaker embedding extraction",
+                            loadResult.errorMsg
+                        )
                         continue
                     }
 
@@ -372,12 +382,15 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
 
                     if (trimmedReferenceText.isNotBlank() && !extractedIclPrompts.containsKey(embeddingDim)) {
                         val iclPromptFile = File(iclPromptsDir, "$voiceId-d$embeddingDim.json")
-                        val iclLoaded = withContext(nativeDispatcher) {
+                        val iclLoadResult = withContext(nativeDispatcher) {
                             loadIclPromptEngine(modelDir, targetModel, backendPreference)
                         }
-                        if (!iclLoaded) {
+                        if (!iclLoadResult.success) {
                             deleteIclPromptFiles(extractedIclPrompts.values + iclPromptFile.absolutePath)
-                            iclPromptWarning = "Speaker preset created, but ICL prompt extraction is unavailable. Rebuild the native backend, then generate the ICL prompt from this preset."
+                            iclPromptWarning = loadFailureMessage(
+                                "Speaker preset created, but the ICL prompt encoder could not be loaded",
+                                iclLoadResult.errorMsg
+                            )
                             continue
                         }
                         val iclExtraction = withContext(nativeDispatcher) {
@@ -472,11 +485,11 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
                 var extracted = false
                 var lastError: String? = null
                 for (targetModel in targetModels) {
-                    val loaded = withContext(nativeDispatcher) {
+                    val loadResult = withContext(nativeDispatcher) {
                         loadTalkerEngine(modelDir, targetModel, backendPreference)
                     }
-                    if (!loaded) {
-                        lastError = "Failed to load $targetModel."
+                    if (!loadResult.success) {
+                        lastError = loadFailureMessage("Failed to load $targetModel", loadResult.errorMsg)
                         continue
                     }
 
@@ -578,11 +591,14 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
                 var extracted = false
                 var lastError: String? = null
                 for (targetModel in targetModels) {
-                    val loaded = withContext(nativeDispatcher) {
+                    val loadResult = withContext(nativeDispatcher) {
                         loadIclPromptEngine(modelDir, targetModel, backendPreference)
                     }
-                    if (!loaded) {
-                        lastError = "Failed to load $targetModel for ICL prompt extraction."
+                    if (!loadResult.success) {
+                        lastError = loadFailureMessage(
+                            "Failed to load $targetModel for ICL prompt extraction",
+                            loadResult.errorMsg
+                        )
                         continue
                     }
 
@@ -846,9 +862,11 @@ class VoicesViewModel(initialAppDir: String = defaultAppDirectory().absolutePath
             try {
                 val audio = withContext(nativeDispatcher) {
                     val resolvedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
-                    val loaded = loadTalkerEngine(modelDir, resolvedModelName, backendPreference)
-                    if (!loaded) {
-                        throw IllegalStateException("Failed to load Qwen3 models from the selected directory.")
+                    val loadResult = loadTalkerEngine(modelDir, resolvedModelName, backendPreference)
+                    if (!loadResult.success) {
+                        throw IllegalStateException(
+                            loadFailureMessage("Failed to load Qwen3 models", loadResult.errorMsg)
+                        )
                     }
 
                     val capabilities = qwenEngine.getModelCapabilities()

@@ -265,11 +265,11 @@ class StudioViewModel : ViewModel() {
             try {
                 withContext(Dispatchers.IO) {
                     val resolvedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
-                    val loaded = withContext(nativeDispatcher) {
-                        qwenEngine.load(modelDir, resolvedModelName, backendPreference)
+                    val loadResult = withContext(nativeDispatcher) {
+                        qwenEngine.loadDetailed(modelDir, resolvedModelName, backendPreference)
                     }
-                    if (!loaded) {
-                        throw Exception("Failed to load Qwen3 models from directory.")
+                    if (!loadResult.success) {
+                        throw Exception(modelLoadError(loadResult.errorMsg))
                     }
 
                     val caps = withContext(nativeDispatcher) { qwenEngine.getModelCapabilities() }
@@ -415,8 +415,13 @@ class StudioViewModel : ViewModel() {
         if (modelDir.isBlank() || _uiState.value.isGenerating) return
         viewModelScope.launch(Dispatchers.IO) {
             val resolvedModelName = modelName?.trim().takeUnless { it.isNullOrEmpty() }
-            val loaded = withContext(nativeDispatcher) { qwenEngine.load(modelDir, resolvedModelName, backendPreference) }
-            if (!loaded) return@launch
+            val loadResult = withContext(nativeDispatcher) {
+                qwenEngine.loadDetailed(modelDir, resolvedModelName, backendPreference)
+            }
+            if (!loadResult.success) {
+                _uiState.update { it.copy(error = modelLoadError(loadResult.errorMsg)) }
+                return@launch
+            }
 
             val caps = withContext(nativeDispatcher) { qwenEngine.getModelCapabilities() }
             val speakers = if (caps?.supportsNamedSpeakers == true) {
@@ -427,6 +432,10 @@ class StudioViewModel : ViewModel() {
             applyCapabilitiesAndSpeakers(caps, speakers)
         }
     }
+
+    private fun modelLoadError(detail: String?): String =
+        detail?.trim()?.takeIf { it.isNotEmpty() }?.let { "Failed to load Qwen3 models: $it" }
+            ?: "Failed to load Qwen3 models from directory."
 
     /**
      * Replays the last generated audio.

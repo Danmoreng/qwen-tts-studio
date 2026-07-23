@@ -141,6 +141,7 @@ class QwenEngine {
         const val BACKEND_CUDA = 2
 
         private var isNativeLoaded = false
+        private var nativeLoadError: String? = null
         private val loadLock = Any()
 
         /**
@@ -307,9 +308,13 @@ class QwenEngine {
                     val dll = File(root, mainLibName)
                     System.load(dll.absolutePath)
                     isNativeLoaded = true
+                    nativeLoadError = null
                     println("[QwenEngine] JNI loaded successfully: ${dll.absolutePath}")
                 } catch (e: Throwable) {
-                    System.err.println("[QwenEngine] Failed to load JNI: ${e.message}")
+                    nativeLoadError = e.message?.takeIf { it.isNotBlank() }
+                        ?: e::class.simpleName
+                        ?: "Unknown native library error"
+                    System.err.println("[QwenEngine] Failed to load JNI: $nativeLoadError")
                     e.printStackTrace()
                 }
             }
@@ -439,8 +444,23 @@ class QwenEngine {
         modelDir: String,
         modelName: String? = null,
         backendPreference: NativeBackendPreference = NativeBackendPreference.Auto
-    ): Boolean {
-        if (!File(modelDir).exists() || !File(modelDir).isDirectory) return false
+    ): Boolean = loadDetailed(modelDir, modelName, backendPreference).success
+
+    /**
+     * Loads the engine and models while preserving any native initialization or model-loader error.
+     */
+    fun loadDetailed(
+        modelDir: String,
+        modelName: String? = null,
+        backendPreference: NativeBackendPreference = NativeBackendPreference.Auto
+    ): NativeOperationResult {
+        val modelDirectory = File(modelDir)
+        if (!modelDirectory.exists() || !modelDirectory.isDirectory) {
+            return NativeOperationResult(
+                false,
+                "Model directory does not exist or is not a directory: ${modelDirectory.absolutePath}"
+            )
+        }
 
         release()
         loadedModelDir = modelDir
@@ -450,9 +470,9 @@ class QwenEngine {
         ensureNativeLoaded()
         
         if (!isNativeLoaded) {
-            val root = try { resolveNativeRoot() } catch (e: Exception) { File(".") }
-            useCliFallback = resolveCliExe(root) != null
-            return useCliFallback
+            return enableCliFallbackOrFailure(
+                "Native engine could not be loaded: ${nativeLoadError ?: "Unknown native library error"}"
+            )
         }
 
         return try {
@@ -466,23 +486,28 @@ class QwenEngine {
                     nativeGetActiveBackendName()?.takeIf { it.isNotBlank() }?.let {
                         println("[QwenEngine] Active backend: $it")
                     }
-                    true
+                    NativeOperationResult(true)
                 } else {
+                    val error = runCatching { nativeGetLastError(nativePtr) }
+                        .getOrNull()
+                        ?.trim()
+                        ?.takeIf { it.isNotEmpty() }
+                        ?: "Native model loader returned failure without additional details."
+                    System.err.println("[QwenEngine] Failed to load models: $error")
                     release()
-                    val root = resolveNativeRoot()
-                    useCliFallback = resolveCliExe(root) != null
-                    useCliFallback
+                    enableCliFallbackOrFailure(error)
                 }
             } else {
-                val root = resolveNativeRoot()
-                useCliFallback = resolveCliExe(root) != null
-                useCliFallback
+                enableCliFallbackOrFailure("Native engine initialization failed.")
             }
         } catch (e: Throwable) {
             e.printStackTrace()
-            val root = resolveNativeRoot()
-            useCliFallback = resolveCliExe(root) != null
-            useCliFallback
+            release()
+            enableCliFallbackOrFailure(
+                e.message?.takeIf { it.isNotBlank() }
+                    ?: e::class.simpleName
+                    ?: "Unknown native model loading error"
+            )
         }
     }
 
@@ -490,8 +515,23 @@ class QwenEngine {
         modelDir: String,
         modelName: String? = null,
         backendPreference: NativeBackendPreference = NativeBackendPreference.Auto
-    ): Boolean {
-        if (!File(modelDir).exists() || !File(modelDir).isDirectory) return false
+    ): Boolean = loadIclPromptEncoderDetailed(modelDir, modelName, backendPreference).success
+
+    /**
+     * Loads the ICL prompt encoder while preserving any native loader error.
+     */
+    fun loadIclPromptEncoderDetailed(
+        modelDir: String,
+        modelName: String? = null,
+        backendPreference: NativeBackendPreference = NativeBackendPreference.Auto
+    ): NativeOperationResult {
+        val modelDirectory = File(modelDir)
+        if (!modelDirectory.exists() || !modelDirectory.isDirectory) {
+            return NativeOperationResult(
+                false,
+                "Model directory does not exist or is not a directory: ${modelDirectory.absolutePath}"
+            )
+        }
 
         release()
         loadedModelDir = modelDir
@@ -501,9 +541,9 @@ class QwenEngine {
         ensureNativeLoaded()
 
         if (!isNativeLoaded) {
-            val root = try { resolveNativeRoot() } catch (e: Exception) { File(".") }
-            useCliFallback = resolveCliExe(root) != null
-            return useCliFallback
+            return enableCliFallbackOrFailure(
+                "Native engine could not be loaded: ${nativeLoadError ?: "Unknown native library error"}"
+            )
         }
 
         return try {
@@ -514,28 +554,43 @@ class QwenEngine {
             if (nativePtr != 0L) {
                 val ok = nativeLoadIclPromptEncoder(nativePtr, modelDir, modelName)
                 if (ok) {
-                    true
+                    NativeOperationResult(true)
                 } else {
+                    val error = runCatching { nativeGetLastError(nativePtr) }
+                        .getOrNull()
+                        ?.trim()
+                        ?.takeIf { it.isNotEmpty() }
+                        ?: "Native ICL prompt encoder loader returned failure without additional details."
+                    System.err.println("[QwenEngine] Failed to load ICL prompt encoder: $error")
                     release()
-                    val root = resolveNativeRoot()
-                    useCliFallback = resolveCliExe(root) != null
-                    useCliFallback
+                    enableCliFallbackOrFailure(error)
                 }
             } else {
-                val root = resolveNativeRoot()
-                useCliFallback = resolveCliExe(root) != null
-                useCliFallback
+                enableCliFallbackOrFailure("Native engine initialization failed.")
             }
         } catch (e: UnsatisfiedLinkError) {
-            System.err.println("[QwenEngine] ICL prompt encoder JNI is unavailable. Rebuild qwen3_tts.dll after updating qwen3-tts.cpp: ${e.message}")
-            val root = resolveNativeRoot()
-            useCliFallback = resolveCliExe(root) != null
-            useCliFallback
+            val message = "ICL prompt encoder JNI is unavailable. Rebuild qwen3_tts.dll after updating qwen3-tts.cpp: ${e.message}"
+            System.err.println("[QwenEngine] $message")
+            release()
+            enableCliFallbackOrFailure(message)
         } catch (e: Throwable) {
             e.printStackTrace()
-            val root = resolveNativeRoot()
-            useCliFallback = resolveCliExe(root) != null
-            useCliFallback
+            release()
+            enableCliFallbackOrFailure(
+                e.message?.takeIf { it.isNotBlank() }
+                    ?: e::class.simpleName
+                    ?: "Unknown native ICL prompt encoder loading error"
+            )
+        }
+    }
+
+    private fun enableCliFallbackOrFailure(errorMsg: String): NativeOperationResult {
+        val root = runCatching { resolveNativeRoot() }.getOrElse { File(".") }
+        useCliFallback = resolveCliExe(root) != null
+        return if (useCliFallback) {
+            NativeOperationResult(true)
+        } else {
+            NativeOperationResult(false, errorMsg)
         }
     }
 
